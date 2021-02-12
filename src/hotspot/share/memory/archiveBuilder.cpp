@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -24,7 +24,9 @@
 
 #include "precompiled.hpp"
 #include "classfile/classLoaderDataShared.hpp"
+#include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionaryShared.hpp"
+#include "classfile/vmClasses.hpp"
 #include "logging/log.hpp"
 #include "logging/logStream.hpp"
 #include "memory/allStatic.hpp"
@@ -38,15 +40,36 @@
 #include "oops/instanceKlass.hpp"
 #include "oops/objArrayKlass.hpp"
 #include "oops/oopHandle.inline.hpp"
+#include "runtime/sharedRuntime.hpp"
+#include "runtime/thread.hpp"
 #include "utilities/align.hpp"
 #include "utilities/bitMap.inline.hpp"
 #include "utilities/hashtable.inline.hpp"
 
-ArchiveBuilder* ArchiveBuilder::_singleton = NULL;
-intx ArchiveBuilder::_buffer_to_target_delta = 0;
+ArchiveBuilder* ArchiveBuilder::_current = NULL;
+class AdapterHandlerEntry;
+
+class MethodTrampolineInfo {
+  address _c2i_entry_trampoline;
+  AdapterHandlerEntry** _adapter_trampoline;
+public:
+  address c2i_entry_trampoline() { return _c2i_entry_trampoline; }
+  AdapterHandlerEntry** adapter_trampoline() { return _adapter_trampoline; }
+  void set_c2i_entry_trampoline(address addr) { _c2i_entry_trampoline = addr; }
+  void set_adapter_trampoline(AdapterHandlerEntry** entry) { _adapter_trampoline = entry; }
+};
+
+class AdapterToTrampoline : public ResourceHashtable<
+  AdapterHandlerEntry*, MethodTrampolineInfo,
+  primitive_hash<AdapterHandlerEntry*>,
+  primitive_equals<AdapterHandlerEntry*>,
+  941, // prime number
+  ResourceObj::C_HEAP> {};
+
+static AdapterToTrampoline* _adapter_to_trampoline = NULL;
 
 ArchiveBuilder::OtherROAllocMark::~OtherROAllocMark() {
-  char* newtop = ArchiveBuilder::singleton()->_ro_region->top();
+  char* newtop = ArchiveBuilder::current()->_ro_region->top();
   ArchiveBuilder::alloc_stats()->record_other_type(int(newtop - _oldtop), true);
 }
 
@@ -138,8 +161,8 @@ void ArchiveBuilder::SourceObjList::relocate(int i, ArchiveBuilder* builder) {
 
 ArchiveBuilder::ArchiveBuilder(DumpRegion* mc_region, DumpRegion* rw_region, DumpRegion* ro_region)
   : _rw_src_objs(), _ro_src_objs(), _src_obj_table(INITIAL_TABLE_SIZE) {
-  assert(_singleton == NULL, "must be");
-  _singleton = this;
+  assert(_current == NULL, "must be");
+  _current = this;
 
   _klasses = new (ResourceObj::C_HEAP, mtClassShared) GrowableArray<Klass*>(4 * K, mtClassShared);
   _symbols = new (ResourceObj::C_HEAP, mtClassShared) GrowableArray<Symbol*>(256 * K, mtClassShared);
@@ -154,12 +177,24 @@ ArchiveBuilder::ArchiveBuilder(DumpRegion* mc_region, DumpRegion* rw_region, Dum
   _rw_region = rw_region;
   _ro_region = ro_region;
 
+  _num_dump_regions_used = 0;
+
   _estimated_metaspaceobj_bytes = 0;
+  _estimated_hashtable_bytes = 0;
+  _estimated_trampoline_bytes = 0;
+
+  _requested_static_archive_bottom = NULL;
+  _requested_static_archive_top = NULL;
+  _mapped_static_archive_bottom = NULL;
+  _mapped_static_archive_top = NULL;
+  _requested_dynamic_archive_bottom = NULL;
+  _requested_dynamic_archive_top = NULL;
+  _buffer_to_requested_delta = 0;
 }
 
 ArchiveBuilder::~ArchiveBuilder() {
-  assert(_singleton == this, "must be");
-  _singleton = NULL;
+  assert(_current == this, "must be");
+  _current = NULL;
 
   clean_up_src_obj_table();
 
@@ -259,6 +294,10 @@ void ArchiveBuilder::gather_klasses_and_symbols() {
     // DynamicArchiveBuilder::sort_methods()).
     sort_symbols_and_fix_hash();
     sort_klasses();
+
+    // TODO -- we need a proper estimate for the archived modules, etc,
+    // but this should be enough for now
+    _estimated_metaspaceobj_bytes += 200 * 1024 * 1024;
   }
 }
 
@@ -288,6 +327,93 @@ int ArchiveBuilder::compare_klass_by_name(Klass** a, Klass** b) {
 void ArchiveBuilder::sort_klasses() {
   log_info(cds)("Sorting classes ... ");
   _klasses->sort(compare_klass_by_name);
+}
+
+size_t ArchiveBuilder::estimate_archive_size() {
+  // size of the symbol table and two dictionaries, plus the RunTimeSharedClassInfo's
+  size_t symbol_table_est = SymbolTable::estimate_size_for_archive();
+  size_t dictionary_est = SystemDictionaryShared::estimate_size_for_archive();
+  _estimated_hashtable_bytes = symbol_table_est + dictionary_est;
+
+  _estimated_trampoline_bytes = allocate_method_trampoline_info();
+
+  size_t total = 0;
+
+  total += _estimated_metaspaceobj_bytes;
+  total += _estimated_hashtable_bytes;
+  total += _estimated_trampoline_bytes;
+
+  // allow fragmentation at the end of each dump region
+  total += _total_dump_regions * reserve_alignment();
+
+  log_info(cds)("_estimated_hashtable_bytes = " SIZE_FORMAT " + " SIZE_FORMAT " = " SIZE_FORMAT,
+                symbol_table_est, dictionary_est, _estimated_hashtable_bytes);
+  log_info(cds)("_estimated_metaspaceobj_bytes = " SIZE_FORMAT, _estimated_metaspaceobj_bytes);
+  log_info(cds)("_estimated_trampoline_bytes = " SIZE_FORMAT, _estimated_trampoline_bytes);
+  log_info(cds)("total estimate bytes = " SIZE_FORMAT, total);
+
+  return align_up(total, reserve_alignment());
+}
+
+address ArchiveBuilder::reserve_buffer() {
+  size_t buffer_size = estimate_archive_size();
+  ReservedSpace rs(buffer_size);
+  if (!rs.is_reserved()) {
+    log_error(cds)("Failed to reserve " SIZE_FORMAT " bytes of output buffer.", buffer_size);
+    vm_direct_exit(0);
+  }
+
+  // buffer_bottom is the lowest address of the 3 core regions (mc, rw, ro) when
+  // we are copying the class metadata into the buffer.
+  address buffer_bottom = (address)rs.base();
+  log_info(cds)("Reserved output buffer space at    : " PTR_FORMAT " [" SIZE_FORMAT " bytes]",
+                p2i(buffer_bottom), buffer_size);
+  MetaspaceShared::set_shared_rs(rs);
+
+  MetaspaceShared::init_shared_dump_space(_mc_region);
+  _buffer_bottom = buffer_bottom;
+  _last_verified_top = buffer_bottom;
+  _current_dump_space = _mc_region;
+  _num_dump_regions_used = 1;
+  _other_region_used_bytes = 0;
+
+  ArchivePtrMarker::initialize(&_ptrmap, (address*)_mc_region->base(), (address*)_mc_region->top());
+
+  // The bottom of the static archive should be mapped at this address by default.
+  _requested_static_archive_bottom = (address)MetaspaceShared::requested_base_address();
+
+  // The bottom of the archive (that I am writing now) should be mapped at this address by default.
+  address my_archive_requested_bottom;
+
+  if (DumpSharedSpaces) {
+    my_archive_requested_bottom = _requested_static_archive_bottom;
+  } else {
+    _mapped_static_archive_bottom = (address)MetaspaceObj::shared_metaspace_base();
+    _mapped_static_archive_top  = (address)MetaspaceObj::shared_metaspace_top();
+    assert(_mapped_static_archive_top >= _mapped_static_archive_bottom, "must be");
+    size_t static_archive_size = _mapped_static_archive_top - _mapped_static_archive_bottom;
+
+    // At run time, we will mmap the dynamic archive at my_archive_requested_bottom
+    _requested_static_archive_top = _requested_static_archive_bottom + static_archive_size;
+    my_archive_requested_bottom = align_up(_requested_static_archive_top, MetaspaceShared::reserved_space_alignment());
+
+    _requested_dynamic_archive_bottom = my_archive_requested_bottom;
+  }
+
+  _buffer_to_requested_delta = my_archive_requested_bottom - _buffer_bottom;
+
+  address my_archive_requested_top = my_archive_requested_bottom + buffer_size;
+  if (my_archive_requested_bottom <  _requested_static_archive_bottom ||
+      my_archive_requested_top    <= _requested_static_archive_bottom) {
+    // Size overflow.
+    log_error(cds)("my_archive_requested_bottom = " INTPTR_FORMAT, p2i(my_archive_requested_bottom));
+    log_error(cds)("my_archive_requested_top    = " INTPTR_FORMAT, p2i(my_archive_requested_top));
+    log_error(cds)("SharedBaseAddress (" INTPTR_FORMAT ") is too high. "
+                   "Please rerun java -Xshare:dump with a lower value", p2i(_requested_static_archive_bottom));
+    vm_direct_exit(0);
+  }
+
+  return buffer_bottom;
 }
 
 void ArchiveBuilder::iterate_sorted_roots(MetaspaceClosure* it, bool is_relocating_pointers) {
@@ -540,32 +666,29 @@ public:
 };
 
 void ArchiveBuilder::relocate_roots() {
+  log_info(cds)("Relocating external roots ... ");
   ResourceMark rm;
   RefRelocator doit(this);
   iterate_sorted_roots(&doit, /*is_relocating_pointers=*/true);
   doit.finish();
-}
-
-void ArchiveBuilder::relocate_pointers() {
-  log_info(cds)("Relocating embedded pointers ... ");
-  relocate_embedded_pointers(&_rw_src_objs);
-  relocate_embedded_pointers(&_ro_src_objs);
-  update_special_refs();
-
-  log_info(cds)("Relocating external roots ... ");
-  relocate_roots();
-
   log_info(cds)("done");
 }
 
-// We must relocate the System::_well_known_klasses only after we have copied the
+void ArchiveBuilder::relocate_metaspaceobj_embedded_pointers() {
+  log_info(cds)("Relocating embedded pointers in core regions ... ");
+  relocate_embedded_pointers(&_rw_src_objs);
+  relocate_embedded_pointers(&_ro_src_objs);
+  update_special_refs();
+}
+
+// We must relocate vmClasses::_klasses[] only after we have copied the
 // java objects in during dump_java_heap_objects(): during the object copy, we operate on
 // old objects which assert that their klass is the original klass.
-void ArchiveBuilder::relocate_well_known_klasses() {
-  log_info(cds)("Relocating SystemDictionary::_well_known_klasses[] ... ");
+void ArchiveBuilder::relocate_vm_classes() {
+  log_info(cds)("Relocating vmClasses::_klasses[] ... ");
   ResourceMark rm;
   RefRelocator doit(this);
-  SystemDictionary::well_known_klasses_do(&doit);
+  vmClasses::metaspace_pointers_do(&doit);
 }
 
 void ArchiveBuilder::make_klasses_shareable() {
@@ -590,9 +713,125 @@ void ArchiveBuilder::make_klasses_shareable() {
 
       if (log_is_enabled(Debug, cds, class)) {
         ResourceMark rm;
-        log_debug(cds, class)("klasses[%4d] = " PTR_FORMAT " %s", i, p2i(to_target(ik)), ik->external_name());
+        log_debug(cds, class)("klasses[%4d] = " PTR_FORMAT " %s", i, p2i(to_requested(ik)), ik->external_name());
       }
     }
+  }
+}
+
+uintx ArchiveBuilder::buffer_to_offset(address p) const {
+  address requested_p = to_requested(p);
+  assert(requested_p >= _requested_static_archive_bottom, "must be");
+  return requested_p - _requested_static_archive_bottom;
+}
+
+uintx ArchiveBuilder::any_to_offset(address p) const {
+  if (is_in_mapped_static_archive(p)) {
+    assert(DynamicDumpSharedSpaces, "must be");
+    return p - _mapped_static_archive_bottom;
+  }
+  return buffer_to_offset(p);
+}
+
+// Update a Java object to point its Klass* to the new location after
+// shared archive has been compacted.
+void ArchiveBuilder::relocate_klass_ptr(oop o) {
+  assert(DumpSharedSpaces, "sanity");
+  Klass* k = get_relocated_klass(o->klass());
+  Klass* requested_k = to_requested(k);
+  narrowKlass nk = CompressedKlassPointers::encode_not_null(requested_k, _requested_static_archive_bottom);
+  o->set_narrow_klass(nk);
+}
+
+// RelocateBufferToRequested --- Relocate all the pointers in mc/rw/ro,
+// so that the archive can be mapped to the "requested" location without runtime relocation.
+//
+// - See ArchiveBuilder header for the definition of "buffer", "mapped" and "requested"
+// - ArchivePtrMarker::ptrmap() marks all the pointers in the mc/rw/ro regions
+// - Every pointer must have one of the following values:
+//   [a] NULL:
+//       No relocation is needed. Remove this pointer from ptrmap so we don't need to
+//       consider it at runtime.
+//   [b] Points into an object X which is inside the buffer:
+//       Adjust this pointer by _buffer_to_requested_delta, so it points to X
+//       when the archive is mapped at the requested location.
+//   [c] Points into an object Y which is inside mapped static archive:
+//       - This happens only during dynamic dump
+//       - Adjust this pointer by _mapped_to_requested_static_archive_delta,
+//         so it points to Y when the static archive is mapped at the requested location.
+template <bool STATIC_DUMP>
+class RelocateBufferToRequested : public BitMapClosure {
+  ArchiveBuilder* _builder;
+  address _buffer_bottom;
+  intx _buffer_to_requested_delta;
+  intx _mapped_to_requested_static_archive_delta;
+  size_t _max_non_null_offset;
+
+ public:
+  RelocateBufferToRequested(ArchiveBuilder* builder) {
+    _builder = builder;
+    _buffer_bottom = _builder->buffer_bottom();
+    _buffer_to_requested_delta = builder->buffer_to_requested_delta();
+    _mapped_to_requested_static_archive_delta = builder->requested_static_archive_bottom() - builder->mapped_static_archive_bottom();
+    _max_non_null_offset = 0;
+
+    address bottom = _builder->buffer_bottom();
+    address top = _builder->buffer_top();
+    address new_bottom = bottom + _buffer_to_requested_delta;
+    address new_top = top + _buffer_to_requested_delta;
+    log_debug(cds)("Relocating archive from [" INTPTR_FORMAT " - " INTPTR_FORMAT " ] to "
+                   "[" INTPTR_FORMAT " - " INTPTR_FORMAT " ]",
+                   p2i(bottom), p2i(top),
+                   p2i(new_bottom), p2i(new_top));
+  }
+
+  bool do_bit(size_t offset) {
+    address* p = (address*)_buffer_bottom + offset;
+    assert(_builder->is_in_buffer_space(p), "pointer must live in buffer space");
+
+    if (*p == NULL) {
+      // todo -- clear bit, etc
+      ArchivePtrMarker::ptrmap()->clear_bit(offset);
+    } else {
+      if (STATIC_DUMP) {
+        assert(_builder->is_in_buffer_space(*p), "old pointer must point inside buffer space");
+        *p += _buffer_to_requested_delta;
+        assert(_builder->is_in_requested_static_archive(*p), "new pointer must point inside requested archive");
+      } else {
+        if (_builder->is_in_buffer_space(*p)) {
+          *p += _buffer_to_requested_delta;
+          // assert is in requested dynamic archive
+        } else {
+          assert(_builder->is_in_mapped_static_archive(*p), "old pointer must point inside buffer space or mapped static archive");
+          *p += _mapped_to_requested_static_archive_delta;
+          assert(_builder->is_in_requested_static_archive(*p), "new pointer must point inside requested archive");
+        }
+      }
+      _max_non_null_offset = offset;
+    }
+
+    return true; // keep iterating
+  }
+
+  void doit() {
+    ArchivePtrMarker::ptrmap()->iterate(this);
+    ArchivePtrMarker::compact(_max_non_null_offset);
+  }
+};
+
+
+void ArchiveBuilder::relocate_to_requested() {
+  size_t my_archive_size = buffer_top() - buffer_bottom();
+
+  if (DumpSharedSpaces) {
+    _requested_static_archive_top = _requested_static_archive_bottom + my_archive_size;
+    RelocateBufferToRequested<true> patcher(this);
+    patcher.doit();
+  } else {
+    assert(DynamicDumpSharedSpaces, "must be");
+    _requested_dynamic_archive_top = _requested_dynamic_archive_bottom + my_archive_size;
+    RelocateBufferToRequested<false> patcher(this);
+    patcher.doit();
   }
 }
 
@@ -609,9 +848,9 @@ void ArchiveBuilder::make_klasses_shareable() {
 // consistency, we log everything using runtime addresses.
 class ArchiveBuilder::CDSMapLogger : AllStatic {
   static intx buffer_to_runtime_delta() {
-    // Translate the buffers used by the MC/RW/RO regions to their eventual locations
+    // Translate the buffers used by the MC/RW/RO regions to their eventual (requested) locations
     // at runtime.
-    return _buffer_to_target_delta + MetaspaceShared::final_delta();
+    return ArchiveBuilder::current()->buffer_to_requested_delta();
   }
 
   // mc/rw/ro regions only
@@ -798,3 +1037,95 @@ void ArchiveBuilder::clean_up_src_obj_table() {
   SrcObjTableCleaner cleaner;
   _src_obj_table.iterate(&cleaner);
 }
+
+void ArchiveBuilder::allocate_method_trampolines_for(InstanceKlass* ik) {
+  if (ik->methods() != NULL) {
+    for (int j = 0; j < ik->methods()->length(); j++) {
+      // Walk the methods in a deterministic order so that the trampolines are
+      // created in a deterministic order.
+      Method* m = ik->methods()->at(j);
+      AdapterHandlerEntry* ent = m->adapter(); // different methods can share the same AdapterHandlerEntry
+      MethodTrampolineInfo* info = _adapter_to_trampoline->get(ent);
+      if (info->c2i_entry_trampoline() == NULL) {
+        info->set_c2i_entry_trampoline(
+          (address)MetaspaceShared::misc_code_space_alloc(SharedRuntime::trampoline_size()));
+        info->set_adapter_trampoline(
+          (AdapterHandlerEntry**)MetaspaceShared::misc_code_space_alloc(sizeof(AdapterHandlerEntry*)));
+      }
+    }
+  }
+}
+
+void ArchiveBuilder::allocate_method_trampolines() {
+  for (int i = 0; i < _klasses->length(); i++) {
+    Klass* k = _klasses->at(i);
+    if (k->is_instance_klass()) {
+      InstanceKlass* ik = InstanceKlass::cast(k);
+      allocate_method_trampolines_for(ik);
+    }
+  }
+}
+
+// Allocate MethodTrampolineInfo for all Methods that will be archived. Also
+// return the total number of bytes needed by the method trampolines in the MC
+// region.
+size_t ArchiveBuilder::allocate_method_trampoline_info() {
+  size_t total = 0;
+  size_t each_method_bytes =
+    align_up(SharedRuntime::trampoline_size(), BytesPerWord) +
+    align_up(sizeof(AdapterHandlerEntry*), BytesPerWord);
+
+  if (_adapter_to_trampoline == NULL) {
+    _adapter_to_trampoline = new (ResourceObj::C_HEAP, mtClass)AdapterToTrampoline();
+  }
+  int count = 0;
+  for (int i = 0; i < _klasses->length(); i++) {
+    Klass* k = _klasses->at(i);
+    if (k->is_instance_klass()) {
+      InstanceKlass* ik = InstanceKlass::cast(k);
+      if (ik->methods() != NULL) {
+        for (int j = 0; j < ik->methods()->length(); j++) {
+          Method* m = ik->methods()->at(j);
+          AdapterHandlerEntry* ent = m->adapter(); // different methods can share the same AdapterHandlerEntry
+          bool is_created = false;
+          MethodTrampolineInfo* info = _adapter_to_trampoline->put_if_absent(ent, &is_created);
+          if (is_created) {
+            count++;
+          }
+        }
+      }
+    }
+  }
+  if (count == 0) {
+    // We have nothing to archive, but let's avoid having an empty region.
+    total = SharedRuntime::trampoline_size();
+  } else {
+    total = count * each_method_bytes;
+  }
+  return align_up(total, SharedSpaceObjectAlignment);
+}
+
+void ArchiveBuilder::update_method_trampolines() {
+  for (int i = 0; i < klasses()->length(); i++) {
+    Klass* k = klasses()->at(i);
+    if (k->is_instance_klass()) {
+      InstanceKlass* ik = InstanceKlass::cast(k);
+      Array<Method*>* methods = ik->methods();
+      for (int j = 0; j < methods->length(); j++) {
+        Method* m = methods->at(j);
+        AdapterHandlerEntry* ent = m->adapter();
+        MethodTrampolineInfo* info = _adapter_to_trampoline->get(ent);
+        // m is the "copy" of the original Method, but its adapter() field is still valid because
+        // we haven't called make_klasses_shareable() yet.
+        m->set_from_compiled_entry(info->c2i_entry_trampoline());
+        m->set_adapter_trampoline(info->adapter_trampoline());
+      }
+    }
+  }
+}
+
+#ifndef PRODUCT
+void ArchiveBuilder::assert_is_vm_thread() {
+  assert(Thread::current()->is_VM_thread(), "ArchiveBuilder should be used only inside the VMThread");
+}
+#endif

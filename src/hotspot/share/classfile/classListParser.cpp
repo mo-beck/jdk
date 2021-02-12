@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,11 +32,14 @@
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/systemDictionaryShared.hpp"
+#include "classfile/vmClasses.hpp"
+#include "classfile/vmSymbols.hpp"
 #include "interpreter/bytecode.hpp"
 #include "interpreter/bytecodeStream.hpp"
 #include "interpreter/linkResolver.hpp"
 #include "logging/log.hpp"
 #include "logging/logTag.hpp"
+#include "memory/archiveUtils.hpp"
 #include "memory/metaspaceShared.hpp"
 #include "memory/resourceArea.hpp"
 #include "oops/constantPool.hpp"
@@ -115,13 +118,6 @@ bool ClassListParser::parse_one_line() {
       _line_len = len;
     }
 
-    // Check if the line is output TRACE_RESOLVE
-    if (strncmp(_line, LambdaFormInvokers::lambda_form_invoker_tag(),
-                strlen(LambdaFormInvokers::lambda_form_invoker_tag())) == 0) {
-      LambdaFormInvokers::append(os::strdup((const char*)_line, mtInternal));
-      continue;
-    }
-
     // valid line
     break;
   }
@@ -133,6 +129,7 @@ bool ClassListParser::parse_one_line() {
   _source = NULL;
   _interfaces_specified = false;
   _indy_items->clear();
+  _lambda_form_line = false;
 
   if (_line[0] == '@') {
     return parse_at_tags();
@@ -185,8 +182,8 @@ bool ClassListParser::parse_one_line() {
   return true;
 }
 
-void ClassListParser::split_tokens_by_whitespace() {
-  int start = 0;
+void ClassListParser::split_tokens_by_whitespace(int offset) {
+  int start = offset;
   int end;
   bool done = false;
   while (!done) {
@@ -203,19 +200,40 @@ void ClassListParser::split_tokens_by_whitespace() {
   }
 }
 
+int ClassListParser::split_at_tag_from_line() {
+  _token = _line;
+  char* ptr;
+  if ((ptr = strchr(_line, ' ')) == NULL) {
+    error("Too few items following the @ tag \"%s\" line #%d", _line, _line_no);
+    return 0;
+  }
+  *ptr++ = '\0';
+  while (*ptr == ' ' || *ptr == '\t') ptr++;
+  return (int)(ptr - _line);
+}
+
 bool ClassListParser::parse_at_tags() {
   assert(_line[0] == '@', "must be");
-  split_tokens_by_whitespace();
-  if (strcmp(_indy_items->at(0), LAMBDA_PROXY_TAG) == 0) {
-    if (_indy_items->length() < 3) {
-      error("Line with @ tag has too few items \"%s\" line #%d", _line, _line_no);
+  int offset;
+  if ((offset = split_at_tag_from_line()) == 0) {
+    return false;
+  }
+
+  if (strcmp(_token, LAMBDA_PROXY_TAG) == 0) {
+    split_tokens_by_whitespace(offset);
+    if (_indy_items->length() < 2) {
+      error("Line with @ tag has too few items \"%s\" line #%d", _token, _line_no);
       return false;
     }
     // set the class name
-    _class_name = _indy_items->at(1);
+    _class_name = _indy_items->at(0);
+    return true;
+  } else if (strcmp(_token, LAMBDA_FORM_TAG) == 0) {
+    LambdaFormInvokers::append(os::strdup((const char*)(_line + offset), mtInternal));
+    _lambda_form_line = true;
     return true;
   } else {
-    error("Invalid @ tag at the beginning of line \"%s\" line #%d", _line, _line_no);
+    error("Invalid @ tag at the beginning of line \"%s\" line #%d", _token, _line_no);
     return false;
   }
 }
@@ -432,7 +450,7 @@ bool ClassListParser::is_matching_cp_entry(constantPoolHandle &pool, int cp_inde
   CDSIndyInfo cii;
   populate_cds_indy_info(pool, cp_index, &cii, THREAD);
   GrowableArray<const char*>* items = cii.items();
-  int indy_info_offset = 2;
+  int indy_info_offset = 1;
   if (_indy_items->length() - indy_info_offset != items->length()) {
     return false;
   }
@@ -443,16 +461,34 @@ bool ClassListParser::is_matching_cp_entry(constantPoolHandle &pool, int cp_inde
   }
   return true;
 }
-
 void ClassListParser::resolve_indy(Symbol* class_name_symbol, TRAPS) {
+  ClassListParser::resolve_indy_impl(class_name_symbol, THREAD);
+  if (HAS_PENDING_EXCEPTION) {
+    ResourceMark rm(THREAD);
+    char* ex_msg = (char*)"";
+    oop message = java_lang_Throwable::message(PENDING_EXCEPTION);
+    if (message != NULL) {
+      ex_msg = java_lang_String::as_utf8_string(message);
+    }
+    log_warning(cds)("resolve_indy for class %s has encountered exception: %s %s",
+                     class_name_symbol->as_C_string(),
+                     PENDING_EXCEPTION->klass()->external_name(),
+                     ex_msg);
+    CLEAR_PENDING_EXCEPTION;
+  }
+}
 
+void ClassListParser::resolve_indy_impl(Symbol* class_name_symbol, TRAPS) {
   Handle class_loader(THREAD, SystemDictionary::java_system_loader());
   Handle protection_domain;
-  Klass* klass = SystemDictionary::resolve_or_fail(class_name_symbol, class_loader, protection_domain, true, THREAD); // FIXME should really be just a lookup
+  Klass* klass = SystemDictionary::resolve_or_fail(class_name_symbol, class_loader, protection_domain, true, CHECK); // FIXME should really be just a lookup
   if (klass != NULL && klass->is_instance_klass()) {
     InstanceKlass* ik = InstanceKlass::cast(klass);
-    MetaspaceShared::try_link_class(ik, THREAD);
-    assert(!HAS_PENDING_EXCEPTION, "unexpected exception");
+    if (SystemDictionaryShared::has_class_failed_verification(ik)) {
+      // don't attempt to resolve indy on classes that has previously failed verification
+      return;
+    }
+    MetaspaceShared::try_link_class(ik, CHECK);
 
     ConstantPool* cp = ik->constants();
     ConstantPoolCache* cpcache = cp->cache();
@@ -464,36 +500,23 @@ void ClassListParser::resolve_indy(Symbol* class_name_symbol, TRAPS) {
       constantPoolHandle pool(THREAD, cp);
       if (pool->tag_at(pool_index).is_invoke_dynamic()) {
         BootstrapInfo bootstrap_specifier(pool, pool_index, indy_index);
-        Handle bsm = bootstrap_specifier.resolve_bsm(THREAD);
+        Handle bsm = bootstrap_specifier.resolve_bsm(CHECK);
         if (!SystemDictionaryShared::is_supported_invokedynamic(&bootstrap_specifier)) {
-           tty->print_cr("is_supported_invokedynamic check failed for cp_index %d", pool_index);
-           continue;
+          log_debug(cds, lambda)("is_supported_invokedynamic check failed for cp_index %d", pool_index);
+          continue;
         }
-        if (is_matching_cp_entry(pool, pool_index, THREAD)) {
+        bool matched = is_matching_cp_entry(pool, pool_index, CHECK);
+        if (matched) {
           found = true;
           CallInfo info;
-          bool is_done = bootstrap_specifier.resolve_previously_linked_invokedynamic(info, THREAD);
+          bool is_done = bootstrap_specifier.resolve_previously_linked_invokedynamic(info, CHECK);
           if (!is_done) {
             // resolve it
             Handle recv;
-            LinkResolver::resolve_invoke(info, recv, pool, indy_index, Bytecodes::_invokedynamic, THREAD);
+            LinkResolver::resolve_invoke(info, recv, pool, indy_index, Bytecodes::_invokedynamic, CHECK);
             break;
           }
           cpce->set_dynamic_call(pool, info);
-          if (HAS_PENDING_EXCEPTION) {
-            ResourceMark rm(THREAD);
-            tty->print("resolve_indy for class %s has", class_name_symbol->as_C_string());
-            oop message = java_lang_Throwable::message(PENDING_EXCEPTION);
-            if (message != NULL) {
-              char* ex_msg = java_lang_String::as_utf8_string(message);
-              tty->print_cr(" exception pending '%s %s'",
-                         PENDING_EXCEPTION->klass()->external_name(), ex_msg);
-            } else {
-              tty->print_cr(" exception pending %s ",
-                         PENDING_EXCEPTION->klass()->external_name());
-            }
-            exit(1);
-          }
         }
       }
     }
@@ -542,7 +565,7 @@ Klass* ClassListParser::load_current_class(TRAPS) {
 
       JavaCalls::call_virtual(&result,
                               loader, //SystemDictionary::java_system_loader(),
-                              SystemDictionary::ClassLoader_klass(),
+                              vmClasses::ClassLoader_klass(),
                               vmSymbols::loadClass_name(),
                               vmSymbols::string_class_signature(),
                               ext_class_name,
@@ -557,6 +580,7 @@ Klass* ClassListParser::load_current_class(TRAPS) {
       klass = java_lang_Class::as_Klass(obj);
     } else { // load classes in bootclasspath/a
       if (HAS_PENDING_EXCEPTION) {
+        ArchiveUtils::check_for_oom(PENDING_EXCEPTION); // exit on OOM
         CLEAR_PENDING_EXCEPTION;
       }
 
@@ -567,6 +591,8 @@ Klass* ClassListParser::load_current_class(TRAPS) {
         } else {
           if (!HAS_PENDING_EXCEPTION) {
             THROW_NULL(vmSymbols::java_lang_ClassNotFoundException());
+          } else {
+            ArchiveUtils::check_for_oom(PENDING_EXCEPTION); // exit on OOM
           }
         }
       }
@@ -575,6 +601,9 @@ Klass* ClassListParser::load_current_class(TRAPS) {
     // If "source:" tag is specified, all super class and super interfaces must be specified in the
     // class list file.
     klass = load_class_from_source(class_name_symbol, CHECK_NULL);
+    if (HAS_PENDING_EXCEPTION) {
+      ArchiveUtils::check_for_oom(PENDING_EXCEPTION); // exit on OOM
+    }
   }
 
   if (klass != NULL && klass->is_instance_klass() && is_id_specified()) {

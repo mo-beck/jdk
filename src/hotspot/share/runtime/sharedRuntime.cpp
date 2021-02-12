@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -23,10 +23,11 @@
  */
 
 #include "precompiled.hpp"
+#include "classfile/javaClasses.hpp"
 #include "jvm.h"
 #include "aot/aotLoader.hpp"
 #include "classfile/stringTable.hpp"
-#include "classfile/systemDictionary.hpp"
+#include "classfile/vmClasses.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/codeCache.hpp"
 #include "code/compiledIC.hpp"
@@ -38,6 +39,7 @@
 #include "compiler/compileBroker.hpp"
 #include "compiler/disassembler.hpp"
 #include "gc/shared/barrierSet.hpp"
+#include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/gcLocker.inline.hpp"
 #include "interpreter/interpreter.hpp"
 #include "interpreter/interpreterRuntime.hpp"
@@ -69,6 +71,7 @@
 #include "runtime/synchronizer.hpp"
 #include "runtime/vframe.inline.hpp"
 #include "runtime/vframeArray.hpp"
+#include "runtime/vm_version.hpp"
 #include "utilities/copy.hpp"
 #include "utilities/dtrace.hpp"
 #include "utilities/events.hpp"
@@ -150,7 +153,6 @@ int SharedRuntime::_nof_interface_calls = 0;
 int SharedRuntime::_nof_optimized_interface_calls = 0;
 int SharedRuntime::_nof_inlined_interface_calls = 0;
 int SharedRuntime::_nof_megamorphic_interface_calls = 0;
-int SharedRuntime::_nof_removable_exceptions = 0;
 
 int SharedRuntime::_new_instance_ctr=0;
 int SharedRuntime::_new_array_ctr=0;
@@ -598,6 +600,28 @@ void SharedRuntime::throw_and_post_jvmti_exception(JavaThread *thread, Handle h_
     address bcp = method()->bcp_from(vfst.bci());
     JvmtiExport::post_exception_throw(thread, method(), bcp, h_exception());
   }
+
+#if INCLUDE_JVMCI
+  if (EnableJVMCI && UseJVMCICompiler) {
+    vframeStream vfst(thread, true);
+    methodHandle method = methodHandle(thread, vfst.method());
+    int bci = vfst.bci();
+    MethodData* trap_mdo = method->method_data();
+    if (trap_mdo != NULL) {
+      // Set exception_seen if the exceptional bytecode is an invoke
+      Bytecode_invoke call = Bytecode_invoke_check(method, bci);
+      if (call.is_valid()) {
+        ResourceMark rm(thread);
+        ProfileData* pdata = trap_mdo->allocate_bci_to_data(bci, NULL);
+        if (pdata != NULL && pdata->is_BitData()) {
+          BitData* bit_data = (BitData*) pdata;
+          bit_data->set_exception_seen();
+        }
+      }
+    }
+  }
+#endif
+
   Exceptions::_throw(thread, __FILE__, __LINE__, h_exception);
 }
 
@@ -765,7 +789,7 @@ void SharedRuntime::throw_StackOverflowError_common(JavaThread* thread, bool del
   // We avoid using the normal exception construction in this case because
   // it performs an upcall to Java, and we're already out of stack space.
   Thread* THREAD = thread;
-  Klass* k = SystemDictionary::StackOverflowError_klass();
+  Klass* k = vmClasses::StackOverflowError_klass();
   oop exception_oop = InstanceKlass::cast(k)->allocate_instance(CHECK);
   if (delayed) {
     java_lang_Throwable::set_message(exception_oop,
@@ -1208,7 +1232,7 @@ methodHandle SharedRuntime::resolve_helper(JavaThread *thread,
   if (JvmtiExport::can_hotswap_or_post_breakpoint()) {
     int retry_count = 0;
     while (!HAS_PENDING_EXCEPTION && callee_method->is_old() &&
-           callee_method->method_holder() != SystemDictionary::Object_klass()) {
+           callee_method->method_holder() != vmClasses::Object_klass()) {
       // If has a pending exception then there is no need to re-try to
       // resolve this method.
       // If the method has been redefined, we need to try again.
@@ -1871,8 +1895,7 @@ void SharedRuntime::check_member_name_argument_is_last_argument(const methodHand
   assert(member_arg_pos >= 0 && member_arg_pos < total_args_passed, "oob");
   assert(sig_bt[member_arg_pos] == T_OBJECT, "dispatch argument must be an object");
 
-  const bool is_outgoing = method->is_method_handle_intrinsic();
-  int comp_args_on_stack = java_calling_convention(sig_bt, regs_without_member_name, total_args_passed - 1, is_outgoing);
+  int comp_args_on_stack = java_calling_convention(sig_bt, regs_without_member_name, total_args_passed - 1);
 
   for (int i = 0; i < member_arg_pos; i++) {
     VMReg a =    regs_with_member_name[i].first();
@@ -2138,13 +2161,6 @@ void SharedRuntime::print_statistics() {
   if (_throw_null_ctr) tty->print_cr("%5d implicit null throw", _throw_null_ctr);
 
   SharedRuntime::print_ic_miss_histogram();
-
-  if (CountRemovableExceptions) {
-    if (_nof_removable_exceptions > 0) {
-      Unimplemented(); // this counter is not yet incremented
-      tty->print_cr("Removable exceptions: %d", _nof_removable_exceptions);
-    }
-  }
 
   // Dump the JRT_ENTRY counters
   if (_new_instance_ctr) tty->print_cr("%5d new instance requires GC", _new_instance_ctr);
@@ -2454,15 +2470,12 @@ class AdapterHandlerTable : public BasicHashtable<mtCode> {
 
  public:
   AdapterHandlerTable()
-    : BasicHashtable<mtCode>(293, (DumpSharedSpaces ? sizeof(CDSAdapterHandlerEntry) : sizeof(AdapterHandlerEntry))) { }
+    : BasicHashtable<mtCode>(293, (sizeof(AdapterHandlerEntry))) { }
 
   // Create a new entry suitable for insertion in the table
   AdapterHandlerEntry* new_entry(AdapterFingerPrint* fingerprint, address i2c_entry, address c2i_entry, address c2i_unverified_entry, address c2i_no_clinit_check_entry) {
     AdapterHandlerEntry* entry = (AdapterHandlerEntry*)BasicHashtable<mtCode>::new_entry(fingerprint->compute_hash());
     entry->init(fingerprint, i2c_entry, c2i_entry, c2i_unverified_entry, c2i_no_clinit_check_entry);
-    if (DumpSharedSpaces) {
-      ((CDSAdapterHandlerEntry*)entry)->init();
-    }
     return entry;
   }
 
@@ -2691,7 +2704,7 @@ AdapterHandlerEntry* AdapterHandlerLibrary::get_adapter0(const methodHandle& met
     }
 
     // Get a description of the compiled java calling convention and the largest used (VMReg) stack slot usage
-    int comp_args_on_stack = SharedRuntime::java_calling_convention(sig_bt, regs, total_args_passed, false);
+    int comp_args_on_stack = SharedRuntime::java_calling_convention(sig_bt, regs, total_args_passed);
 
     // Make a C heap allocated version of the fingerprint to store in the adapter
     fingerprint = new AdapterFingerPrint(total_args_passed, sig_bt);
@@ -2899,11 +2912,8 @@ void AdapterHandlerLibrary::create_native_wrapper(const methodHandle& method) {
       assert(i == total_args_passed, "");
       BasicType ret_type = ss.type();
 
-      // Now get the compiled-Java layout as input (or output) arguments.
-      // NOTE: Stubs for compiled entry points of method handle intrinsics
-      // are just trampolines so the argument registers must be outgoing ones.
-      const bool is_outgoing = method->is_method_handle_intrinsic();
-      int comp_args_on_stack = SharedRuntime::java_calling_convention(sig_bt, regs, total_args_passed, is_outgoing);
+      // Now get the compiled-Java arguments layout.
+      int comp_args_on_stack = SharedRuntime::java_calling_convention(sig_bt, regs, total_args_passed);
 
       // Generate the compiled-to-native wrapper code
       nm = SharedRuntime::generate_native_wrapper(&_masm, method, compile_id, sig_bt, regs, ret_type, critical_entry);
@@ -2947,7 +2957,7 @@ void AdapterHandlerLibrary::create_native_wrapper(const methodHandle& method) {
 VMReg SharedRuntime::name_for_receiver() {
   VMRegPair regs;
   BasicType sig_bt = T_OBJECT;
-  (void) java_calling_convention(&sig_bt, &regs, 1, true);
+  (void) java_calling_convention(&sig_bt, &regs, 1);
   // Return argument 0 register.  In the LP64 build pointers
   // take 2 registers, but the VM wants only the 'main' name.
   return regs.first();
@@ -2978,7 +2988,7 @@ VMRegPair *SharedRuntime::find_callee_arguments(Symbol* sig, bool has_receiver, 
   assert(cnt < 256, "grow table size");
 
   int comp_args_on_stack;
-  comp_args_on_stack = java_calling_convention(sig_bt, regs, cnt, true);
+  comp_args_on_stack = java_calling_convention(sig_bt, regs, cnt);
 
   // the calling convention doesn't count out_preserve_stack_slots so
   // we must add that in to get "true" stack offsets.
@@ -3129,17 +3139,6 @@ void AdapterHandlerEntry::print_adapter_on(outputStream* st) const {
   }
   st->cr();
 }
-
-#if INCLUDE_CDS
-
-void CDSAdapterHandlerEntry::init() {
-  assert(DumpSharedSpaces, "used during dump time only");
-  _c2i_entry_trampoline = (address)MetaspaceShared::misc_code_space_alloc(SharedRuntime::trampoline_size());
-  _adapter_trampoline = (AdapterHandlerEntry**)MetaspaceShared::misc_code_space_alloc(sizeof(AdapterHandlerEntry*));
-};
-
-#endif // INCLUDE_CDS
-
 
 #ifndef PRODUCT
 

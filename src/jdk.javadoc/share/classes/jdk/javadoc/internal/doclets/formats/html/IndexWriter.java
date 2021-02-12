@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1998, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -37,7 +37,7 @@ import javax.lang.model.element.ModuleElement;
 import javax.lang.model.element.PackageElement;
 import javax.lang.model.element.TypeElement;
 
-import com.sun.source.doctree.DocTree;
+import com.sun.source.doctree.DeprecatedTree;
 
 import jdk.javadoc.internal.doclets.formats.html.markup.BodyContents;
 import jdk.javadoc.internal.doclets.formats.html.markup.ContentBuilder;
@@ -123,28 +123,19 @@ public class IndexWriter extends HtmlDocletWriter {
                 ? resources.getText("doclet.Window_Split_Index", displayFirstCharacters.get(0))
                 : resources.getText("doclet.Window_Single_Index");
         HtmlTree body = getBody(getWindowTitle(title));
-        Content headerContent = new ContentBuilder();
-        addTop(headerContent);
-        Navigation navBar = new Navigation(null, configuration, PageMode.INDEX, path);
-        navBar.setUserHeader(getUserHeaderFooter(true));
-        headerContent.add(navBar.getContent(Navigation.Position.TOP));
         Content mainContent = new ContentBuilder();
         addLinksForIndexes(allFirstCharacters, mainContent);
         for (Character ch : displayFirstCharacters) {
             addContents(ch, mainIndex.getItems(ch), mainContent);
         }
         addLinksForIndexes(allFirstCharacters, mainContent);
-        HtmlTree footer = HtmlTree.FOOTER();
-        navBar.setUserFooter(getUserHeaderFooter(false));
-        footer.add(navBar.getContent(Navigation.Position.BOTTOM));
-        addBottom(footer);
         body.add(new BodyContents()
-                .setHeader(headerContent)
+                .setHeader(getHeader(PageMode.INDEX))
                 .addMainContent(HtmlTree.DIV(HtmlStyle.header,
                         HtmlTree.HEADING(Headings.PAGE_TITLE_HEADING,
                                 contents.getContent("doclet.Index"))))
                 .addMainContent(mainContent)
-                .setFooter(footer));
+                .setFooter(getFooter()));
 
         String description = splitIndex ? "index: " + displayFirstCharacters.get(0) : "index";
         printHtmlDocument(null, description, body);
@@ -176,7 +167,7 @@ public class IndexWriter extends HtmlDocletWriter {
     protected void addHeading(char ch, Content contentTree) {
         Content headContent = new StringContent(String.valueOf(ch));
         HtmlTree heading = HtmlTree.HEADING(Headings.CONTENT_HEADING, HtmlStyle.title, headContent)
-                .setId(getNameForIndex(ch));
+                .setId(HtmlIds.forIndexChar(ch));
         contentTree.add(heading);
     }
 
@@ -223,8 +214,8 @@ public class IndexWriter extends HtmlDocletWriter {
             case RECORD:
             case ANNOTATION_TYPE:
             case INTERFACE:
-                dt = HtmlTree.DT(getLink(new LinkInfoImpl(configuration,
-                        LinkInfoImpl.Kind.INDEX, (TypeElement) element).strong(true)));
+                dt = HtmlTree.DT(getLink(new HtmlLinkInfo(configuration,
+                        HtmlLinkInfo.Kind.INDEX, (TypeElement) element).style(HtmlStyle.typeNameLink)));
                 dt.add(" - ");
                 addClassInfo((TypeElement) element, dt);
                 break;
@@ -234,8 +225,8 @@ public class IndexWriter extends HtmlDocletWriter {
             case FIELD:
             case ENUM_CONSTANT:
                 TypeElement containingType = item.getContainingTypeElement();
-                dt = HtmlTree.DT(HtmlTree.SPAN(HtmlStyle.memberNameLink,
-                        getDocLink(LinkInfoImpl.Kind.INDEX, containingType, element, new StringContent(label))));
+                dt = HtmlTree.DT(getDocLink(HtmlLinkInfo.Kind.INDEX, containingType, element,
+                                label, HtmlStyle.memberNameLink));
                 dt.add(" - ");
                 addMemberDesc(element, containingType, dt);
                 break;
@@ -277,7 +268,7 @@ public class IndexWriter extends HtmlDocletWriter {
         String itemPath = pathToRoot.isEmpty() ? "" : pathToRoot.getPath() + "/";
         itemPath += item.getUrl();
         HtmlTree labelLink = HtmlTree.A(itemPath, new StringContent(item.getLabel()));
-        Content dt = HtmlTree.DT(HtmlTree.SPAN(HtmlStyle.searchTagLink, labelLink));
+        Content dt = HtmlTree.DT(labelLink.setStyle(HtmlStyle.searchTagLink));
         dt.add(" - ");
         dt.add(contents.getContent("doclet.Search_tag_in", item.getHolder()));
         dlTree.add(dt);
@@ -300,13 +291,12 @@ public class IndexWriter extends HtmlDocletWriter {
      * @param contentTree the content tree to which the comment will be added
      */
     protected void addComment(Element element, Content contentTree) {
-        List<? extends DocTree> tags;
         Content span = HtmlTree.SPAN(HtmlStyle.deprecatedLabel, getDeprecatedPhrase(element));
         HtmlTree div = new HtmlTree(TagName.DIV);
         div.setStyle(HtmlStyle.deprecationBlock);
         if (utils.isDeprecated(element)) {
             div.add(span);
-            tags = utils.getBlockTags(element, DocTree.Kind.DEPRECATED);
+            List<? extends DeprecatedTree> tags = utils.getDeprecatedTrees(element);
             if (!tags.isEmpty())
                 addInlineDeprecatedComment(element, tags.get(0), div);
             contentTree.add(div);
@@ -348,8 +338,8 @@ public class IndexWriter extends HtmlDocletWriter {
             default -> throw new IllegalArgumentException(member.getKind().toString());
         };
         contentTree.add(contents.getContent(resource, kindName)).add(" ");
-        addPreQualifiedClassLink(LinkInfoImpl.Kind.INDEX, enclosing,
-                false, contentTree);
+        addPreQualifiedClassLink(HtmlLinkInfo.Kind.INDEX, enclosing,
+                null, contentTree);
     }
 
     /**
@@ -365,7 +355,7 @@ public class IndexWriter extends HtmlDocletWriter {
             Content label = new StringContent(Character.toString(ch));
             Content link = splitIndex
                     ? links.createLink(DocPaths.indexN(iter.nextIndex()), label)
-                    : links.createLink(getNameForIndex(ch), label);
+                    : links.createLink(HtmlIds.forIndexChar(ch), label);
             contentTree.add(link);
             contentTree.add(Entity.NO_BREAK_SPACE);
         }
@@ -380,15 +370,4 @@ public class IndexWriter extends HtmlDocletWriter {
                 .collect(Collectors.toList());
         contentTree.add(contents.join(getVerticalSeparator(), pageLinks));
     }
-
-    /**
-     * Returns the anchor name for a first character of names in the index.
-     *
-     * @param firstCharacter the character
-     * @return               a name
-     */
-    protected String getNameForIndex(char firstCharacter) {
-        return "I:" + links.getName(Character.toString(firstCharacter));
-    }
-
 }

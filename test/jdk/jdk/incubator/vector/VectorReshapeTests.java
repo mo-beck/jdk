@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -40,7 +40,7 @@ import jdk.incubator.vector.VectorSpecies;
  * @modules jdk.incubator.vector
  * @modules java.base/jdk.internal.vm.annotation
  * @run testng/othervm --add-opens jdk.incubator.vector/jdk.incubator.vector=ALL-UNNAMED
- *      VectorReshapeTests
+ *      -XX:-TieredCompilation VectorReshapeTests
  */
 
 @Test
@@ -416,7 +416,7 @@ public class VectorReshapeTests {
                            ", origin=" + origin);
         System.out.println("expect: "+Arrays.toString(expected));
         System.out.println("output: "+Arrays.toString(output));
-        Assert.assertEquals(expected, output);
+        Assert.assertEquals(output, expected);
     }
 
     @Test(dataProvider = "byteUnaryOpProvider")
@@ -800,20 +800,41 @@ public class VectorReshapeTests {
         int count = data.length / asize;
         assert(data.length == count * asize);
         byte[] result = new byte[count * bsize];
-        int rp = 0, dp = 0;
+
         int minsize = Math.min(asize, bsize);
+        int size_diff = bsize - asize;
+        ByteOrder bo = ByteOrder.nativeOrder();
+        int rp = 0, dp = 0;
         for (int i = 0; i < count; i++) {
-            int nextrp = rp + bsize;
-            byte b = 0;
-            for (int j = 0; j < asize; j++) {
-                b = data[dp++];
-                if (j < minsize)  result[rp++] = b;
+            if (bo == ByteOrder.BIG_ENDIAN) {
+                if (size_diff > 0) {
+                    byte sign = (byte)(data[dp] >> 7); // sign extend
+                    for (int j = 0; j < size_diff; j++) {
+                        result[rp++] = sign;
+                    }
+                } else {
+                    dp -= size_diff; // step forward if needed
+                }
             }
-            b >>= 7;  // sign extend
-            while (rp < nextrp)  result[rp++] = b;
+            byte b = 0;
+            for (int j = 0; j < minsize; j++) {
+                b = data[dp++];
+                result[rp++] = b;
+            }
+            if (bo == ByteOrder.LITTLE_ENDIAN) {
+                if (size_diff > 0) {
+                    byte sign = (byte)(b >> 7); // sign extend
+                    for (int j = 0; j < size_diff; j++) {
+                        result[rp++] = sign;
+                    }
+                } else {
+                    dp -= size_diff; // step forward if needed
+                }
+            }
         }
         assert(dp == data.length);
         assert(rp == result.length);
+
         return result;
     }
 

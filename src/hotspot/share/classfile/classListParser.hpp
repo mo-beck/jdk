@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2019, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -30,7 +30,8 @@
 #include "utilities/growableArray.hpp"
 #include "utilities/hashtable.inline.hpp"
 
-#define LAMBDA_PROXY_TAG "@lambda-proxy:"
+#define LAMBDA_PROXY_TAG "@lambda-proxy"
+#define LAMBDA_FORM_TAG  "@lambda-form-invoker"
 
 class ID2KlassTable : public KVHashtable<int, InstanceKlass*, mtInternal> {
 public:
@@ -99,6 +100,7 @@ class ClassListParser : public StackObj {
   GrowableArray<int>* _interfaces;
   bool                _interfaces_specified;
   const char*         _source;
+  bool                _lambda_form_line;
 
   bool parse_int_option(const char* option_name, int* value);
   bool parse_uint_option(const char* option_name, int* value);
@@ -112,6 +114,7 @@ class ClassListParser : public StackObj {
   bool is_matching_cp_entry(constantPoolHandle &pool, int cp_index, TRAPS);
 
   void resolve_indy(Symbol* class_name_symbol, TRAPS);
+  void resolve_indy_impl(Symbol* class_name_symbol, TRAPS);
 public:
   ClassListParser(const char* file);
   ~ClassListParser();
@@ -120,7 +123,8 @@ public:
     return _instance;
   }
   bool parse_one_line();
-  void split_tokens_by_whitespace();
+  void split_tokens_by_whitespace(int offset);
+  int split_at_tag_from_line();
   bool parse_at_tags();
   char* _token;
   void error(const char* msg, ...);
@@ -161,6 +165,8 @@ public:
   Klass* load_current_class(TRAPS);
 
   bool is_loading_from_source();
+
+  bool lambda_form_line() { return _lambda_form_line; }
 
   // Look up the super or interface of the current class being loaded
   // (in this->load_current_class()).

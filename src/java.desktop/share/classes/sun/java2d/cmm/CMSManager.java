@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, 2014, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2006, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -25,24 +25,13 @@
 
 package sun.java2d.cmm;
 
-import java.awt.color.ColorSpace;
-import java.awt.color.ICC_Profile;
 import java.awt.color.CMMException;
-import java.awt.image.BufferedImage;
-import java.awt.image.Raster;
-import java.awt.image.WritableRaster;
+import java.awt.color.ICC_Profile;
 import java.security.AccessController;
-import java.security.PrivilegedAction;
+
 import sun.security.action.GetPropertyAction;
 
-public class CMSManager {
-    public static ColorSpace GRAYspace;       // These two fields allow access
-    public static ColorSpace LINEAR_RGBspace; // to java.awt.color.ColorSpace
-                                              // private fields from other
-                                              // packages.  The fields are set
-                                              // by java.awt.color.ColorSpace
-                                              // and read by
-                                              // java.awt.image.ColorModel.
+public final class CMSManager {
 
     private static PCMM cmmImpl = null;
 
@@ -101,11 +90,6 @@ public class CMSManager {
             Profile p = tcmm.loadProfile(data);
             System.err.printf("(ID=%s)\n", p.toString());
             return p;
-        }
-
-        public void freeProfile(Profile p) {
-            System.err.printf(cName + ".freeProfile(ID=%s)\n", p.toString());
-            tcmm.freeProfile(p);
         }
 
         public int getProfileSize(Profile p) {

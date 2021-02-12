@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1997, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -163,7 +163,6 @@ public class Main {
     boolean debug = false; // debug
     boolean signManifest = true; // "sign" the whole manifest
     boolean externalSF = true; // leave the .SF out of the PKCS7 block
-    boolean directSign = false; // sign SF directly or thru signedAttrs
     boolean strict = false;  // treat warnings as error
     boolean revocationCheck = false; // Revocation check flag
 
@@ -473,8 +472,6 @@ public class Main {
                 signManifest = false;
             } else if (collator.compare(flags, "-internalsf") ==0) {
                 externalSF = false;
-            } else if (collator.compare(flags, "-directsign") ==0) {
-                directSign = true;
             } else if (collator.compare(flags, "-verify") ==0) {
                 verify = true;
             } else if (collator.compare(flags, "-verbose") ==0) {
@@ -662,9 +659,6 @@ public class Main {
         System.out.println();
         System.out.println(rb.getString
                 (".internalsf.include.the.SF.file.inside.the.signature.block"));
-        System.out.println();
-        System.out.println(rb.getString
-                (".directsign.sign.the.SF.file.directly.no.signerinfo.signedattributes"));
         System.out.println();
         System.out.println(rb.getString
                 (".sectionsonly.don.t.compute.hash.of.entire.manifest"));
@@ -1407,6 +1401,35 @@ public class Main {
         }
     }
 
+    private static String checkWeakKey(PublicKey key) {
+        int kLen = KeyUtil.getKeySize(key);
+        if (DISABLED_CHECK.permits(SIG_PRIMITIVE_SET, key)) {
+            if (LEGACY_CHECK.permits(SIG_PRIMITIVE_SET, key)) {
+                if (kLen >= 0) {
+                    return String.format(rb.getString("key.bit"), kLen);
+                } else {
+                    return rb.getString("unknown.size");
+                }
+            } else {
+                return String.format(rb.getString("key.bit.weak"), kLen);
+            }
+        } else {
+           return String.format(rb.getString("key.bit.disabled"), kLen);
+        }
+    }
+
+    private static String checkWeakAlg(String alg) {
+        if (DISABLED_CHECK.permits(SIG_PRIMITIVE_SET, alg, null)) {
+            if (LEGACY_CHECK.permits(SIG_PRIMITIVE_SET, alg, null)) {
+                return alg;
+            } else {
+                return String.format(rb.getString("with.weak"), alg);
+            }
+        } else {
+            return String.format(rb.getString("with.disabled"), alg);
+        }
+    }
+
     private static MessageFormat validityTimeForm = null;
     private static MessageFormat notYetTimeForm = null;
     private static MessageFormat expiredTimeForm = null;
@@ -1450,12 +1473,31 @@ public class Main {
         }
 
         if (x509Cert != null) {
+            PublicKey key = x509Cert.getPublicKey();
+            String sigalg = x509Cert.getSigAlgName();
 
-            certStr.append("\n").append(tab).append("[");
-
+            // Process the certificate in the signer's cert chain to see if
+            // weak algorithms are used, and provide warnings as needed.
             if (trustedCerts.contains(x509Cert)) {
+                // If the cert is trusted, only check its key size, but not its
+                // signature algorithm.
+                certStr.append("\n").append(tab)
+                        .append("Signature algorithm: ")
+                        .append(sigalg)
+                        .append(rb.getString("COMMA"))
+                        .append(checkWeakKey(key));
+
+                certStr.append("\n").append(tab).append("[");
                 certStr.append(rb.getString("trusted.certificate"));
             } else {
+                certStr.append("\n").append(tab)
+                        .append("Signature algorithm: ")
+                        .append(checkWeakAlg(sigalg))
+                        .append(rb.getString("COMMA"))
+                        .append(checkWeakKey(key));
+
+                certStr.append("\n").append(tab).append("[");
+
                 Date notAfter = x509Cert.getNotAfter();
                 try {
                     boolean printValidity = true;
@@ -1773,7 +1815,6 @@ public class Main {
 
         builder.setProperty("sectionsOnly", Boolean.toString(!signManifest));
         builder.setProperty("internalSF", Boolean.toString(!externalSF));
-        builder.setProperty("directsign", Boolean.toString(directSign));
 
         FileOutputStream fos = null;
         try {

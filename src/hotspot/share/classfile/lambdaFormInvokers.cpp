@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,6 +32,7 @@
 #include "classfile/symbolTable.hpp"
 #include "classfile/systemDictionary.hpp"
 #include "classfile/systemDictionaryShared.hpp"
+#include "classfile/vmClasses.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "logging/log.hpp"
 #include "memory/oopFactory.hpp"
@@ -64,11 +65,9 @@ void LambdaFormInvokers::regenerate_holder_classes(TRAPS) {
   guarantee(cds_klass != NULL, "jdk/internal/misc/CDS must exist!");
 
   int len = _lambdaform_lines->length();
-  objArrayHandle list_lines = oopFactory::new_objArray_handle(SystemDictionary::String_klass(), len, CHECK);
+  objArrayHandle list_lines = oopFactory::new_objArray_handle(vmClasses::String_klass(), len, CHECK);
   for (int i = 0; i < len; i++) {
-    char* record = _lambdaform_lines->at(i);
-    record += strlen(lambda_form_invoker_tag()) + 1; // skip the @lambda_form_invoker prefix
-    Handle h_line = java_lang_String::create_from_str(record, CHECK);
+    Handle h_line = java_lang_String::create_from_str(_lambdaform_lines->at(i), CHECK);
     list_lines->obj_at_put(i, h_line());
   }
 
@@ -141,7 +140,7 @@ void LambdaFormInvokers::reload_class(char* name, ClassFileStream& st, TRAPS) {
 
   {
     MutexLocker mu_r(THREAD, Compile_lock); // add_to_hierarchy asserts this.
-    SystemDictionary::add_to_hierarchy(result, THREAD);
+    SystemDictionary::add_to_hierarchy(result);
   }
   // new class not linked yet.
   MetaspaceShared::try_link_class(result, THREAD);
@@ -149,5 +148,5 @@ void LambdaFormInvokers::reload_class(char* name, ClassFileStream& st, TRAPS) {
 
   // exclude the existing class from dump
   SystemDictionaryShared::set_excluded(InstanceKlass::cast(klass));
-  log_info(cds)("Replaced class %s, old: %p  new: %p", name, klass, result);
+  log_info(cds, lambda)("Replaced class %s, old: %p  new: %p", name, klass, result);
 }

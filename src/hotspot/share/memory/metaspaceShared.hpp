@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -32,8 +32,6 @@
 #include "oops/oop.hpp"
 #include "utilities/macros.hpp"
 #include "utilities/resourceHash.hpp"
-
-#define MAX_SHARED_DELTA                (0x7FFFFFFF)
 
 // Metaspace::allocate() requires that all blocks must be aligned with KlassAlignmentInBytes.
 // We enforce the same alignment rule in blocks allocated from the shared space.
@@ -76,7 +74,6 @@ class MetaspaceShared : AllStatic {
   static bool _archive_loading_failed;
   static bool _remapped_readwrite;
   static address _i2i_entry_code_buffers;
-  static size_t  _i2i_entry_code_buffers_size;
   static size_t  _core_spaces_size;
   static void* _shared_metaspace_static_top;
   static intx _relocation_delta;
@@ -126,21 +123,11 @@ class MetaspaceShared : AllStatic {
   }
 
   static void commit_to(ReservedSpace* rs, VirtualSpace* vs, char* newtop) NOT_CDS_RETURN;
-  static void initialize_dumptime_shared_and_meta_spaces() NOT_CDS_RETURN;
+  static void initialize_for_static_dump() NOT_CDS_RETURN;
   static void initialize_runtime_shared_and_meta_spaces() NOT_CDS_RETURN;
   static void post_initialize(TRAPS) NOT_CDS_RETURN;
 
   static void print_on(outputStream* st);
-
-  // Delta of this object from SharedBaseAddress
-  static uintx object_delta_uintx(void* obj);
-
-  static u4 object_delta_u4(void* obj) {
-    // offset is guaranteed to be less than MAX_SHARED_DELTA in DumpRegion::expand_top_to()
-    uintx deltax = object_delta_uintx(obj);
-    guarantee(deltax <= MAX_SHARED_DELTA, "must be 32-bit offset");
-    return (u4)deltax;
-  }
 
   static void set_archive_loading_failed() {
     _archive_loading_failed = true;
@@ -237,29 +224,30 @@ class MetaspaceShared : AllStatic {
     return align_up(byte_size, SharedSpaceObjectAlignment);
   }
 
-  static address i2i_entry_code_buffers(size_t total_size);
-
-  static address i2i_entry_code_buffers() {
-    return _i2i_entry_code_buffers;
-  }
-  static size_t i2i_entry_code_buffers_size() {
-    return _i2i_entry_code_buffers_size;
-  }
-  static void relocate_klass_ptr(oop o);
-
-  static Klass* get_relocated_klass(Klass *k, bool is_final=false);
+  static void init_misc_code_space();
+  static address i2i_entry_code_buffers();
 
   static void initialize_ptr_marker(CHeapBitMap* ptrmap);
 
   // This is the base address as specified by -XX:SharedBaseAddress during -Xshare:dump.
   // Both the base/top archives are written using this as their base address.
+  //
+  // During static dump: _requested_base_address == SharedBaseAddress.
+  //
+  // During dynamic dump: _requested_base_address is not always the same as SharedBaseAddress:
+  // - SharedBaseAddress is used for *reading the base archive*. I.e., CompactHashtable uses
+  //   it to convert offsets to pointers to Symbols in the base archive.
+  //   The base archive may be mapped to an OS-selected address due to ASLR. E.g.,
+  //   you may have SharedBaseAddress == 0x00ff123400000000.
+  // - _requested_base_address is used for *writing the output archive*. It's usually
+  //   0x800000000 (unless it was set by -XX:SharedBaseAddress during -Xshare:dump).
   static char* requested_base_address() {
     return _requested_base_address;
   }
 
   // Non-zero if the archive(s) need to be mapped a non-default location due to ASLR.
   static intx relocation_delta() { return _relocation_delta; }
-  static intx final_delta();
+
   static bool use_windows_memory_mapping() {
     const bool is_windows = (NOT_WINDOWS(false) WINDOWS_ONLY(true));
     //const bool is_windows = true; // enable this to allow testing the windows mmap semantics on Linux, etc.
@@ -295,10 +283,12 @@ private:
   static char* reserve_address_space_for_archives(FileMapInfo* static_mapinfo,
                                                   FileMapInfo* dynamic_mapinfo,
                                                   bool use_archive_base_addr,
+                                                  ReservedSpace& total_space_rs,
                                                   ReservedSpace& archive_space_rs,
                                                   ReservedSpace& class_space_rs);
-  static void release_reserved_spaces(ReservedSpace& archive_space_rs,
-                                      ReservedSpace& class_space_rs);
+ static void release_reserved_spaces(ReservedSpace& total_space_rs,
+                                     ReservedSpace& archive_space_rs,
+                                     ReservedSpace& class_space_rs);
   static MapArchiveResult map_archive(FileMapInfo* mapinfo, char* mapped_base_address, ReservedSpace rs);
   static void unmap_archive(FileMapInfo* mapinfo);
 };

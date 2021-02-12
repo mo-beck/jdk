@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, 2020, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, 2021, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -29,6 +29,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.ArrayList;
+import jdk.test.lib.cds.CDSTestUtils;
 
 /*
  * @test
@@ -58,7 +59,7 @@ public class DynamicLotsOfClasses extends DynamicArchiveTestBase {
         ArrayList<String> list = new ArrayList<>();
         TestCommon.findAllClasses(list);
 
-        String classList = System.getProperty("user.dir") + File.separator +
+        String classList = CDSTestUtils.getOutputDir() + File.separator +
                            "LotsOfClasses.list";
         List<String> lines = list;
         Path file = Paths.get(classList);
@@ -79,8 +80,7 @@ public class DynamicLotsOfClasses extends DynamicArchiveTestBase {
              "-XX:+UnlockDiagnosticVMOptions", "-XX:+WhiteBoxAPI",
              "-cp", appJar, mainClass, classList)
              .assertNormalExit(output -> {
-                 output.shouldContain("Buffer-space to target-space delta")
-                        .shouldContain("Written dynamic archive 0x");
+                 output.shouldContain("Written dynamic archive 0x");
              });
     }
 }
