@@ -32,6 +32,7 @@
 
 class G1EvacInfo;
 class G1NUMA;
+class G1HeapSizingPolicy;
 
 // Interface to keep track of which regions G1 is currently allocating into. Provides
 // some accessors (e.g. allocating into them, or getting their occupancy).
@@ -71,6 +72,12 @@ private:
   void reuse_retained_old_region(G1EvacInfo* evacuation_info,
                                  OldGCAllocRegion* old,
                                  G1HeapRegion** retained);
+
+  void record_region_activity(G1HeapRegion* hr) {
+    if (hr != nullptr) {
+      hr->record_activity();
+    }
+  }
 
   // Accessors to the allocation regions.
   inline MutatorAllocRegion* mutator_alloc_region(uint node_index);

@@ -56,6 +56,7 @@
   template(ParallelGCCollect)                     \
   template(G1CollectForAllocation)                \
   template(G1CollectFull)                         \
+  template(G1ShrinkHeap)                          \
   template(G1PauseRemark)                         \
   template(G1PauseCleanup)                        \
   template(G1TryInitiateConcMark)                 \

@@ -35,6 +35,7 @@
 #include "gc/g1/g1EdenRegions.hpp"
 #include "gc/g1/g1EvacStats.hpp"
 #include "gc/g1/g1GCPauseType.hpp"
+#include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1HeapRegionAttr.hpp"
 #include "gc/g1/g1HeapRegionManager.hpp"
 #include "gc/g1/g1HeapRegionSet.hpp"
@@ -149,6 +150,7 @@ class G1CollectedHeap : public CollectedHeap {
   friend class VM_G1CollectForAllocation;
   friend class VM_G1CollectFull;
   friend class VM_G1TryInitiateConcMark;
+  friend class VM_G1ShrinkHeap; 
   friend class VMStructs;
   friend class MutatorAllocRegion;
   friend class G1FullCollector;
@@ -191,6 +193,8 @@ private:
 
   // The block offset table for the G1 heap.
   G1BlockOffsetTable* _bot;
+
+  G1HeapEvaluationTask* _heap_evaluation_task;
 
 public:
   void rebuild_free_region_list();
@@ -565,6 +569,8 @@ public:
   // Immediately uncommit uncommittable regions.
   uint uncommit_regions(uint region_limit);
   bool has_uncommittable_regions();
+  // Check if a region can be uncommitted based on emptiness and usage threshold
+  bool check_region_for_uncommit(G1HeapRegion* hr);
 
   G1NUMA* numa() const { return _numa; }
 
@@ -574,6 +580,10 @@ public:
   // (Rounds up to a G1HeapRegion boundary.)
   bool expand(size_t expand_bytes, WorkerThreads* pretouch_workers = nullptr, double* expand_time_ms = nullptr);
   bool expand_single_region(uint node_index);
+
+  // Request an immediate heap contraction of (at most) the given number of bytes. 
+  // Returns true if any pages were actually uncommitted.
+  bool request_heap_shrink(size_t shrink_bytes);
 
   // Returns the PLAB statistics for a given destination.
   inline G1EvacStats* alloc_buffer_stats(G1HeapRegionAttr dest);
@@ -965,6 +975,7 @@ public:
   // allocation, via inlined code (by exporting the address of the top and
   // end fields defining the extent of the contiguous allocation region.)
   // But G1CollectedHeap doesn't yet support this.
+
 
   // Returns true if an incremental GC should be upgrade to a full gc. This
   // is done when there are no free regions and the heap can't be expanded.

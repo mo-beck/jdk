@@ -31,6 +31,10 @@ on:
       gcc-major-version:
         required: true
         type: string
+      make-target:
+        required: false
+        type: string
+        default: 'product-bundles'
       extra-conf-options:
         required: false
         type: string
@@ -187,6 +191,6 @@ jobs:
         id: build
         uses: ./.github/actions/do-build
         with:
-          make-target: 'hotspot ${{ inputs.make-arguments }}'
+          make-target: '${{ inputs.make-target }} ${{ inputs.make-arguments }}'
           platform: linux-${{ matrix.target-cpu }}
         if: steps.create-sysroot.outcome == 'success' || steps.get-cached-sysroot.outputs.cache-hit == 'true'

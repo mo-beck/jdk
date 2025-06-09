@@ -111,6 +111,7 @@
 #include "runtime/java.hpp"
 #include "runtime/orderAccess.hpp"
 #include "runtime/threadSMR.hpp"
+#include "runtime/vmOperations.hpp"
 #include "runtime/vmThread.hpp"
 #include "utilities/align.hpp"
 #include "utilities/autoRestore.hpp"
@@ -1077,6 +1078,24 @@ void G1CollectedHeap::shrink(size_t shrink_bytes) {
   _verifier->verify_region_sets_optional();
 }
 
+bool G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
+  if (shrink_bytes == 0) {
+    return false;
+  }
+
+  // Fast path: if we are already at a safepoint (e.g. called from the
+  // GC service thread) just do the work directly.
+  if (SafepointSynchronize::is_at_safepoint()) {
+    shrink(shrink_bytes);
+    return true;                     // we *did* something
+  }
+
+  // Schedule a VM-op to do the work at the next safepoint without blocking the caller
+  VM_G1ShrinkHeap op(this, shrink_bytes);
+  VMThread::execute(&op);
+  return true;                       // pages were at least *requested* to be released
+}
+
 class OldRegionSetChecker : public G1HeapRegionSetChecker {
 public:
   void check_mt_safety() {
@@ -1179,6 +1198,8 @@ G1CollectedHeap::G1CollectedHeap() :
   _is_alive_closure_cm(),
   _is_subject_to_discovery_cm(this),
   _region_attr() {
+
+  _heap_evaluation_task = nullptr;
 
   _verifier = new G1HeapVerifier(this);
 
@@ -1430,8 +1451,12 @@ jint G1CollectedHeap::initialize() {
   _free_arena_memory_task = new G1MonotonicArenaFreeMemoryTask("Card Set Free Memory Task");
   _service_thread->register_task(_free_arena_memory_task);
 
-  // Here we allocate the dummy G1HeapRegion that is required by the
-  // G1AllocRegion class.
+  if (G1UseTimeBasedHeapSizing) {
+    _heap_evaluation_task = new G1HeapEvaluationTask(this, _heap_sizing_policy);
+    _service_thread->register_task(_heap_evaluation_task);
+  }
+
+  // Here we allocate the dummy G1HeapRegion that is required by the G1AllocRegion class
   G1HeapRegion* dummy_region = _hrm.get_dummy_region();
 
   // We'll re-use the same region whether the alloc region will
@@ -2874,6 +2899,7 @@ void G1CollectedHeap::retire_mutator_alloc_region(G1HeapRegion* alloc_region,
   assert_heap_locked_or_at_safepoint(true /* should_be_vm_thread */);
   assert(alloc_region->is_eden(), "all mutator alloc regions should be eden");
 
+  alloc_region->record_activity(); // Update region access time
   collection_set()->add_eden_region(alloc_region);
   increase_used(allocated_bytes);
   _eden.add_used_bytes(allocated_bytes);
@@ -3068,3 +3094,20 @@ void G1CollectedHeap::prepare_group_cardsets_for_scan() {
 
   collection_set()->prepare_groups_for_scan();
 }
+
+bool G1CollectedHeap::check_region_for_uncommit(G1HeapRegion* hr) {
+  // First check if region is empty
+  if (!hr->is_empty()) {
+    log_trace(gc, heap)("Region %u not eligible for uncommit - not empty", hr->hrm_index());
+    return false;
+  }
+
+  bool should_uncommit = hr->should_uncommit(G1HeapSizingPolicy::uncommit_delay());
+  
+  log_trace(gc, heap)("Region %u uncommit check: empty=%d should_uncommit=%d", 
+                      hr->hrm_index(), hr->is_empty(), should_uncommit);
+                      
+  return should_uncommit;
+}
+
+
