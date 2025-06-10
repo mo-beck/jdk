@@ -46,9 +46,43 @@ runs:
     - name: 'Determine bundle names'
       id: bundles
       run: |
-        # Rename bundles to consistent names
-        jdk_bundle_zip="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.zip 2> /dev/null || true)"
-        jdk_bundle_tar_gz="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
+        echo "Looking for artifacts in build directory..."
+        find build -type f \( -name "*.zip" -o -name "*.tar.gz" \) -ls
+        
+        # Search in both images and lib directories for HotSpot/JDK artifacts
+        echo "Scanning build directories recursively for artifacts..."
+        find build -type f \( -name "*.so" -o -name "*.dll" \) -ls
+        
+        # First look for pre-made bundles
+        jdk_bundle_zip="$(find build -type f \( \
+          -name "jdk-*_bin.zip" -o \
+          -name "hotspot*.zip" \
+        \) -print 2> /dev/null | head -1 || true)"
+        
+        jdk_bundle_tar_gz="$(find build -type f \( \
+          -name "jdk-*_bin.tar.gz" -o \
+          -name "hotspot*.tar.gz" \
+        \) -print 2> /dev/null | head -1 || true)"
+        
+        # Also look in the jdk/lib/server directory for HotSpot library
+        if [[ -z "$jdk_bundle_zip" && -z "$jdk_bundle_tar_gz" ]]; then
+          hotspot_lib="$(find build -type f \( -name "jvm.dll" -o -name "libjvm.so" -o -name "libjvm.dylib" \) 2> /dev/null | head -1 || true)"
+          if [[ -n "$hotspot_lib" ]]; then
+            parent_dir="$(dirname "$(dirname "$hotspot_lib")")"
+            work_dir="$(pwd)"
+            echo "Creating archive from HotSpot library at $hotspot_lib"
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              archive_name="$work_dir/hotspot.zip"
+              (cd "$parent_dir" && zip -r "$archive_name" .)
+              jdk_bundle_zip="$archive_name"
+            else
+              archive_name="$work_dir/hotspot.tar.gz"
+              (cd "$parent_dir" && tar czf "$archive_name" .)
+              jdk_bundle_tar_gz="$archive_name"
+            fi
+          fi
+        fi
+        
         static_jdk_bundle_zip="$(ls build/*/bundles/static-jdk-*_bin${{ inputs.debug-suffix }}.zip 2> /dev/null || true)"
         static_jdk_bundle_tar_gz="$(ls build/*/bundles/static-jdk-*_bin${{ inputs.debug-suffix }}.tar.gz 2> /dev/null || true)"
         symbols_bundle="$(ls build/*/bundles/jdk-*_bin${{ inputs.debug-suffix }}-symbols.tar.gz 2> /dev/null || true)"
@@ -57,10 +91,23 @@ runs:
 
         mkdir bundles
 
+        # Debug output
+        echo "Found artifacts:"
+        [ -n "$jdk_bundle_zip" ] && echo "JDK/HotSpot ZIP: $jdk_bundle_zip"
+        [ -n "$jdk_bundle_tar_gz" ] && echo "JDK/HotSpot TAR.GZ: $jdk_bundle_tar_gz"
+        [ -n "$static_jdk_bundle_zip" ] && echo "Static JDK ZIP: $static_jdk_bundle_zip"
+        [ -n "$static_jdk_bundle_tar_gz" ] && echo "Static JDK TAR.GZ: $static_jdk_bundle_tar_gz"
+        [ -n "$symbols_bundle" ] && echo "Symbols bundle: $symbols_bundle"
+        [ -n "$tests_bundle" ] && echo "Tests bundle: $tests_bundle"
+        [ -n "$static_libs_bundle" ] && echo "Static libs bundle: $static_libs_bundle"
+
+        # Move found artifacts to bundles directory
         if [[ "$jdk_bundle_zip" != "" ]]; then
+          # Normalize to jdk- prefix for all builds
           mv "$jdk_bundle_zip" "bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.zip"
         fi
         if [[ "$jdk_bundle_tar_gz" != "" ]]; then
+          # Normalize to jdk- prefix for all builds  
           mv "$jdk_bundle_tar_gz" "bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz"
         fi
         if [[ "$static_jdk_bundle_zip" != "" ]]; then
@@ -89,7 +136,7 @@ runs:
     - name: 'Upload bundles artifact'
       uses: actions/upload-artifact@v4
       with:
-        name: bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}${{ inputs.static-suffix }}${{ inputs.bundle-suffix }}
+        name: hotspot-bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}${{ inputs.static-suffix }}${{ inputs.bundle-suffix }}
         path: bundles
         retention-days: 1
       if: steps.bundles.outputs.bundles-found == 'true'

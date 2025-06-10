@@ -170,3 +170,10 @@ void VM_G1PauseCleanup::work() {
   G1CollectedHeap* g1h = G1CollectedHeap::heap();
   g1h->concurrent_mark()->cleanup();
 }
+
+VM_G1ShrinkHeap::VM_G1ShrinkHeap(G1CollectedHeap* g1h, size_t bytes) 
+  : _g1h(g1h), _bytes(bytes) {}
+
+void VM_G1ShrinkHeap::doit() {
+  _g1h->shrink(_bytes);
+}

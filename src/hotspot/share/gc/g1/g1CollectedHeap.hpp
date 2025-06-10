@@ -25,6 +25,12 @@
 #ifndef SHARE_GC_G1_G1COLLECTEDHEAP_HPP
 #define SHARE_GC_G1_G1COLLECTEDHEAP_HPP
 
+// Forward declarations
+class G1MonotonicArenaFreeMemoryTask;
+class G1HeapEvaluationTask;
+class G1YoungGCAllocationFailureInjector;
+
+#include "gc/g1/g1HeapOperationCallback.hpp"
 #include "gc/g1/g1BarrierSet.hpp"
 #include "gc/g1/g1BiasedArray.hpp"
 #include "gc/g1/g1CardSet.hpp"
@@ -42,11 +48,10 @@
 #include "gc/g1/g1HeapTransition.hpp"
 #include "gc/g1/g1HeapVerifier.hpp"
 #include "gc/g1/g1MonitoringSupport.hpp"
-#include "gc/g1/g1MonotonicArenaFreeMemoryTask.hpp"
 #include "gc/g1/g1MonotonicArenaFreePool.hpp"
 #include "gc/g1/g1NUMA.hpp"
-#include "gc/g1/g1SurvivorRegions.hpp"
 #include "gc/g1/g1YoungGCAllocationFailureInjector.hpp"
+#include "gc/g1/g1SurvivorRegions.hpp"
 #include "gc/shared/barrierSet.hpp"
 #include "gc/shared/collectedHeap.hpp"
 #include "gc/shared/gcHeapSummary.hpp"
@@ -87,6 +92,9 @@ class PartialArrayStateManager;
 class ReferenceProcessor;
 class STWGCTimer;
 class WorkerThreads;
+
+// Forward declare G1HeapSizingPolicy to break circular dependency
+class G1HeapSizingPolicy;
 
 typedef OverflowTaskQueue<ScannerTask, mtGC>           G1ScannerTasksQueue;
 typedef GenericTaskQueueSet<G1ScannerTasksQueue, mtGC> G1ScannerTasksQueueSet;
@@ -146,7 +154,7 @@ public:
   uint length() const { return _list.length(); }
 };
 
-class G1CollectedHeap : public CollectedHeap {
+class G1CollectedHeap : public CollectedHeap, public G1HeapOperationCallback {
   friend class VM_G1CollectForAllocation;
   friend class VM_G1CollectFull;
   friend class VM_G1TryInitiateConcMark;
@@ -191,6 +199,9 @@ private:
   // Collection set candidates memory statistics after GC.
   G1MonotonicArenaMemoryStats _collection_set_candidates_card_set_stats;
 
+  // From G1HeapOperationCallback
+  virtual void request_shrink(size_t bytes) override;
+
   // The block offset table for the G1 heap.
   G1BlockOffsetTable* _bot;
 
@@ -222,7 +233,9 @@ private:
   // Manages all allocations with regions except humongous object allocations.
   G1Allocator* _allocator;
 
+#if ALLOCATION_FAILURE_INJECTOR
   G1YoungGCAllocationFailureInjector _allocation_failure_injector;
+#endif
 
   // Manages all heap verification.
   G1HeapVerifier* _verifier;
@@ -548,7 +561,9 @@ public:
     return _allocator;
   }
 
+#if ALLOCATION_FAILURE_INJECTOR
   G1YoungGCAllocationFailureInjector* allocation_failure_injector() { return &_allocation_failure_injector; }
+#endif
 
   G1HeapVerifier* verifier() {
     return _verifier;

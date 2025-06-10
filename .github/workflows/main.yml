@@ -36,7 +36,7 @@ on:
       platforms:
         description: 'Platform(s) to execute on (comma separated, e.g. "linux-x64, macos, aarch64")'
         required: true
-        default: 'linux-x64, linux-x64-variants, linux-cross-compile, alpine-linux-x64, macos-x64, macos-aarch64, windows-x64, windows-aarch64, docs'
+        default: 'linux-x64, linux-cross-compile, macos-x64, macos-aarch64, windows-x64, windows-aarch64'
       configure-arguments:
         description: 'Additional configure arguments'
         required: false
@@ -59,7 +59,7 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       # List of platforms to exclude by default
-      EXCLUDED_PLATFORMS: 'alpine-linux-x64'
+      EXCLUDED_PLATFORMS: 'alpine-linux-x64, linux-x64-variants, docs'
     outputs:
       linux-x64: ${{ steps.include.outputs.linux-x64 }}
       linux-x64-variants: ${{ steps.include.outputs.linux-x64-variants }}
@@ -163,104 +163,17 @@ jobs:
     uses: ./.github/workflows/build-linux.yml
     with:
       platform: linux-x64
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       gcc-major-version: '10'
+      debug-levels: '[ "debug" ]'
       extra-conf-options: '--with-native-debug-symbols=none'
       configure-arguments: ${{ github.event.inputs.configure-arguments }}
       make-arguments: ${{ github.event.inputs.make-arguments }}
     if: needs.prepare.outputs.linux-x64 == 'true'
 
-  build-linux-x64-hs-nopch:
-    name: linux-x64-hs-nopch
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'product-bundles test-bundles'
-      debug-levels: '[ "debug" ]'
-      gcc-major-version: '10'
-      extra-conf-options: '--disable-precompiled-headers'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.linux-x64-variants == 'true'
 
-  build-linux-x64-hs-zero:
-    name: linux-x64-hs-zero
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'product-bundles test-bundles'
-      debug-levels: '[ "debug" ]'
-      gcc-major-version: '10'
-      extra-conf-options: '--with-jvm-variants=zero --disable-precompiled-headers'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.linux-x64-variants == 'true'
 
-  build-linux-x64-hs-minimal:
-    name: linux-x64-hs-minimal
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'product-bundles test-bundles'
-      debug-levels: '[ "debug" ]'
-      gcc-major-version: '10'
-      extra-conf-options: '--with-jvm-variants=minimal --disable-precompiled-headers'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.linux-x64-variants == 'true'
 
-  build-linux-x64-hs-optimized:
-    name: linux-x64-hs-optimized
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'hotspot'
-      # Technically this is not the "debug" level, but we can't inject a new matrix state for just this job
-      debug-levels: '[ "debug" ]'
-      gcc-major-version: '10'
-      extra-conf-options: '--with-debug-level=optimized --disable-precompiled-headers'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.linux-x64-variants == 'true'
-
-  build-linux-x64-static:
-    name: linux-x64-static
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'static-jdk-bundles'
-      # There are issues with fastdebug static build in GHA due to space limit.
-      # Only do release build for now.
-      debug-levels: '[ "release" ]'
-      gcc-major-version: '10'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-      static-suffix: "-static"
-    if: needs.prepare.outputs.linux-x64 == 'true'
-
-  build-linux-x64-static-libs:
-    name: linux-x64-static-libs
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      make-target: 'static-libs-bundles'
-      # Only build static-libs-bundles for release builds.
-      # For debug builds, building static-libs often exceeds disk space.
-      debug-levels: '[ "release" ]'
-      gcc-major-version: '10'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-      # Upload static libs bundles separately to avoid interference with normal linux-x64 bundle.
-      # This bundle is not used by testing jobs, but downstreams use it to check that
-      # dependent projects, e.g. libgraal, builds fine.
-      bundle-suffix: "-static-libs"
-    if: needs.prepare.outputs.linux-x64-variants == 'true'
 
   build-linux-cross-compile:
     name: linux-cross-compile
@@ -268,22 +181,13 @@ jobs:
     uses: ./.github/workflows/build-cross-compile.yml
     with:
       gcc-major-version: '10'
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       configure-arguments: ${{ github.event.inputs.configure-arguments }}
       make-arguments: ${{ github.event.inputs.make-arguments }}
+      debug-levels: '[ "debug" ]'
     if: needs.prepare.outputs.linux-cross-compile == 'true'
 
-  build-alpine-linux-x64:
-    name: alpine-linux-x64
-    needs: prepare
-    uses: ./.github/workflows/build-alpine-linux.yml
-    with:
-      platform: alpine-linux-x64
-      make-target: 'product-bundles test-bundles'
-      extra-conf-options: '--with-native-debug-symbols=none'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.alpine-linux-x64 == 'true'
+
 
   build-macos-x64:
     name: macos-x64
@@ -291,7 +195,7 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       platform: macos-x64
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       runs-on: 'macos-13'
       xcode-toolset-version: '14.3.1'
       extra-conf-options: '--with-native-debug-symbols=none'
@@ -305,7 +209,7 @@ jobs:
     uses: ./.github/workflows/build-macos.yml
     with:
       platform: macos-aarch64
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       runs-on: 'macos-14'
       xcode-toolset-version: '15.4'
       extra-conf-options: '--with-native-debug-symbols=none'
@@ -319,7 +223,7 @@ jobs:
     uses: ./.github/workflows/build-windows.yml
     with:
       platform: windows-x64
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       msvc-toolset-version: '14.43'
       msvc-toolset-architecture: 'x86.x64'
       extra-conf-options: '--with-native-debug-symbols=none'
@@ -335,27 +239,13 @@ jobs:
       platform: windows-aarch64
       msvc-toolset-version: '14.43'
       msvc-toolset-architecture: 'arm64'
-      make-target: 'product-bundles test-bundles'
+      make-target: 'hotspot'
       extra-conf-options: '--openjdk-target=aarch64-unknown-cygwin'
       configure-arguments: ${{ github.event.inputs.configure-arguments }}
       make-arguments: ${{ github.event.inputs.make-arguments }}
     if: needs.prepare.outputs.windows-aarch64 == 'true'
 
-  build-docs:
-    name: docs
-    needs: prepare
-    uses: ./.github/workflows/build-linux.yml
-    with:
-      platform: linux-x64
-      debug-levels: '[ "debug" ]'
-      make-target: 'docs-jdk-bundles'
-      # Make sure we never try to make full docs, since that would require a
-      # build JDK, and we do not need the additional testing of the graphs.
-      extra-conf-options: '--disable-full-docs'
-      gcc-major-version: '10'
-      configure-arguments: ${{ github.event.inputs.configure-arguments }}
-      make-arguments: ${{ github.event.inputs.make-arguments }}
-    if: needs.prepare.outputs.docs == 'true'
+
 
   ###
   ### Test jobs
@@ -402,6 +292,29 @@ jobs:
     uses: ./.github/workflows/test.yml
     with:
       platform: windows-x64
+      bootjdk-platform: windows-x64
+      runs-on: windows-2025
+      debug-suffix: -debug
+
+  test-macos-x64:
+    name: macos-x64
+    needs:
+      - build-macos-x64
+    uses: ./.github/workflows/test.yml
+    with:
+      platform: macos-x64
+      bootjdk-platform: macos-x64
+      runs-on: 'macos-13'
+      xcode-toolset-version: '14.3.1'
+      debug-suffix: -debug
+
+  test-windows-aarch64:
+    name: windows-aarch64
+    needs:
+      - build-windows-aarch64
+    uses: ./.github/workflows/test.yml
+    with:
+      platform: windows-aarch64
       bootjdk-platform: windows-x64
       runs-on: windows-2025
       debug-suffix: -debug

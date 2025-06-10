@@ -45,6 +45,7 @@ G1HeapSizingPolicy* G1HeapSizingPolicy::create(const G1CollectedHeap* g1h, const
 G1HeapSizingPolicy::G1HeapSizingPolicy(const G1CollectedHeap* g1h, const G1Analytics* analytics) :
   _g1h(g1h),
   _analytics(analytics),
+  _operation_callback(nullptr),
   _num_prev_pauses_for_heuristics(analytics->number_of_recorded_pause_times()) {
 
   // Read the uncommit delay flag once per JVM run.
@@ -431,10 +432,14 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
                              "target shrink: %zuB (max allowed: %zuB)",
                              inactive_count, total_regions, shrink_bytes, max_shrink_bytes);
         log_debug(gc, sizing)("Region state transition: %zu regions selected for uncommit",
-                     regions_to_uncommit);
-      }
+                            regions_to_uncommit);
 
-      return shrink_bytes;
+        if (_operation_callback != nullptr) {
+          _operation_callback->request_shrink(shrink_bytes);
+        }
+
+        return shrink_bytes;
+      }
     }
   }
 

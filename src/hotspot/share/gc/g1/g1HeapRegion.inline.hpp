@@ -31,6 +31,7 @@
 #include "gc/g1/g1BlockOffsetTable.inline.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1ConcurrentMarkBitMap.inline.hpp"
+#include "gc/g1/g1HeapRegionRemSet.inline.hpp"
 #include "gc/g1/g1MonotonicArena.inline.hpp"
 #include "gc/g1/g1Policy.hpp"
 #include "gc/g1/g1Predictions.hpp"

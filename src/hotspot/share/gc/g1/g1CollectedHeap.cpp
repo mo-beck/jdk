@@ -38,6 +38,7 @@
 #include "gc/g1/g1ConcurrentMarkThread.inline.hpp"
 #include "gc/g1/g1ConcurrentRefine.hpp"
 #include "gc/g1/g1ConcurrentRefineThread.hpp"
+#include "gc/g1/g1HeapSizingPolicy.hpp"  // Include this first to avoid include cycle
 #include "gc/g1/g1DirtyCardQueue.hpp"
 #include "gc/g1/g1EvacStats.inline.hpp"
 #include "gc/g1/g1FullCollector.hpp"
@@ -49,7 +50,6 @@
 #include "gc/g1/g1HeapRegionPrinter.hpp"
 #include "gc/g1/g1HeapRegionRemSet.inline.hpp"
 #include "gc/g1/g1HeapRegionSet.inline.hpp"
-#include "gc/g1/g1HeapSizingPolicy.hpp"
 #include "gc/g1/g1HeapTransition.hpp"
 #include "gc/g1/g1HeapVerifier.hpp"
 #include "gc/g1/g1InitLogger.hpp"
@@ -1163,7 +1163,9 @@ G1CollectedHeap::G1CollectedHeap() :
   _numa(G1NUMA::create()),
   _hrm(),
   _allocator(nullptr),
+#if ALLOCATION_FAILURE_INJECTOR
   _allocation_failure_injector(),
+#endif
   _verifier(nullptr),
   _summary_bytes_used(0),
   _bytes_used_during_gc(0),
@@ -1476,7 +1478,9 @@ jint G1CollectedHeap::initialize() {
 
   _collection_set.initialize(max_num_regions());
 
+#if ALLOCATION_FAILURE_INJECTOR
   allocation_failure_injector()->reset();
+#endif
 
   CPUTimeCounters::create_counter(CPUTimeGroups::CPUTimeType::gc_parallel_workers);
   CPUTimeCounters::create_counter(CPUTimeGroups::CPUTimeType::gc_conc_mark);
@@ -1514,6 +1518,14 @@ void G1CollectedHeap::safepoint_synchronize_end() {
 void G1CollectedHeap::post_initialize() {
   CollectedHeap::post_initialize();
   ref_processing_init();
+}
+
+void G1CollectedHeap::request_shrink(size_t bytes) {
+  log_trace(gc)("Request shrink bytes: %zu", bytes);
+
+  // Forward the request to the public heap shrinking API which will handle
+  // safepoint scheduling and verification
+  request_heap_shrink(bytes);
 }
 
 void G1CollectedHeap::ref_processing_init() {
@@ -2662,7 +2674,7 @@ void G1CollectedHeap::free_region(G1HeapRegion* hr, G1FreeRegionList* free_list)
 }
 
 void G1CollectedHeap::retain_region(G1HeapRegion* hr) {
-  MutexLocker x(G1RareEvent_lock, Mutex::_no_safepoint_check_flag);
+  MutexLocker x(FreeList_lock, Mutex::_no_safepoint_check_flag);
   collection_set()->candidates()->add_retained_region_unsorted(hr);
 }
 

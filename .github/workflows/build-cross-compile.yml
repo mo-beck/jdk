@@ -31,10 +31,14 @@ on:
       gcc-major-version:
         required: true
         type: string
+      debug-levels:
+        required: false
+        type: string
+        default: '[ "debug" ]'
       make-target:
         required: false
         type: string
-        default: 'product-bundles'
+        default: 'exploded-image hotspot-bundles'
       extra-conf-options:
         required: false
         type: string
@@ -53,6 +57,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        debug-level: ${{ fromJSON(inputs.debug-levels) }}
         target-cpu:
           - aarch64
           - arm
@@ -174,7 +179,7 @@ jobs:
           --with-boot-jdk=${{ steps.bootjdk.outputs.path }}
           --with-gtest=${{ steps.gtest.outputs.path }}
           --with-zlib=system
-          --enable-debug
+          ${{ matrix.debug-level == 'debug' && '--with-debug-level=fastdebug' || '' }}
           --disable-precompiled-headers
           --openjdk-target=${{ matrix.gnu-arch }}-linux-gnu${{ matrix.gnu-abi}}
           --with-sysroot=sysroot

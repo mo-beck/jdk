@@ -40,11 +40,11 @@ on:
       make-target:
         required: false
         type: string
-        default: 'product-bundles test-bundles'
+        default: 'exploded-image hotspot-bundles'
       debug-levels:
         required: false
         type: string
-        default: '[ "debug", "release" ]'
+        default: '[ "debug" ]'
       xcode-toolset-version:
         required: true
         type: string

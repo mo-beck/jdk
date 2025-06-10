@@ -54,16 +54,16 @@ runs:
   steps:
     - name: 'Download bundles artifact'
       id: download-bundles
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v4 
       with:
-        name: bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}
+        name: hotspot-bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}
         path: bundles
       continue-on-error: true
 
     - name: 'Download bundles artifact (retry)'
       uses: actions/download-artifact@v4
       with:
-        name: bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}
+        name: hotspot-bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}
         path: bundles
       if: steps.download-bundles.outcome == 'failure'
 
@@ -71,21 +71,23 @@ runs:
       id: download-static-bundles
       uses: actions/download-artifact@v4
       with:
-        name: bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}${{ inputs.static-suffix }}
+        name: hotspot-bundles-${{ inputs.platform }}${{ inputs.debug-suffix }}${{ inputs.static-suffix }}
         path: bundles
       continue-on-error: true
       if: ${{ inputs.static-suffix == '-static' }}
 
     - name: 'Unpack bundles'
       run: |
-        if [[ -e bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.zip ]]; then
-          echo 'Unpacking jdk bundle...'
+        echo "Contents of bundles directory:"
+        ls -la bundles/
+        if [[ -e bundles/hotspot-${{ inputs.platform }}${{ inputs.debug-suffix }}.zip ]] || [[ -e bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.zip ]]; then
+          echo 'Unpacking bundle...'
           mkdir -p bundles/jdk
           unzip -q bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.zip -d bundles/jdk
         fi
 
-        if [[ -e bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz ]]; then
-          echo 'Unpacking jdk bundle...'
+        if [[ -e bundles/hotspot-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz ]] || [[ -e bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz ]]; then
+          echo 'Unpacking bundle...'
           mkdir -p bundles/jdk
           tar -xf bundles/jdk-${{ inputs.platform }}${{ inputs.debug-suffix }}.tar.gz -C bundles/jdk
         fi

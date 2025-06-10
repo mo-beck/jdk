@@ -238,9 +238,11 @@ WorkerThreads* G1YoungCollector::workers() const {
   return _g1h->workers();
 }
 
+#if ALLOCATION_FAILURE_INJECTOR
 G1YoungGCAllocationFailureInjector* G1YoungCollector::allocation_failure_injector() const {
   return _g1h->allocation_failure_injector();
 }
+#endif
 
 
 void G1YoungCollector::wait_for_root_region_scanning() {
@@ -531,7 +533,9 @@ void G1YoungCollector::pre_evacuate_collection_set(G1EvacInfo* evacuation_info) 
   DerivedPointerTable::clear();
 #endif
 
+#if ALLOCATION_FAILURE_INJECTOR
   allocation_failure_injector()->arm_if_needed();
+#endif
 }
 
 class G1ParEvacuateFollowersClosure : public VoidClosure {

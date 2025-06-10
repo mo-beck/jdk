@@ -26,14 +26,14 @@
 #define SHARE_GC_G1_G1HEAPSIZINGPOLICY_HPP
 
 #include "gc/g1/g1_globals.hpp"
-#include "gc/g1/g1HeapRegion.hpp"
+#include "gc/g1/g1HeapOperationCallback.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/globals.hpp"
-#include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 
+// Forward declarations 
 class G1Analytics;
 class G1CollectedHeap;
+class G1HeapRegion;
 
 class G1HeapSizingPolicy: public CHeapObj<mtGC> {
   // MinOverThresholdForGrowth must be less than the number of recorded
@@ -44,6 +44,7 @@ class G1HeapSizingPolicy: public CHeapObj<mtGC> {
 
   const G1CollectedHeap* _g1h;
   const G1Analytics* _analytics;
+  G1HeapOperationCallback* _operation_callback;
 
   const uint _num_prev_pauses_for_heuristics;
   // Ratio check data for determining if heap growth is necessary.
@@ -69,6 +70,10 @@ public:
   // Returns the amount of bytes to resize the heap; if expand is set, the heap
   // should by expanded by that amount, shrunk otherwise.
   size_t full_collection_resize_amount(bool& expand, size_t allocation_word_size);
+
+  void set_operation_callback(G1HeapOperationCallback* callback) {
+    _operation_callback = callback;
+  }
 
   // Clear ratio tracking data used by expansion_amount().
   void clear_ratio_check_data();

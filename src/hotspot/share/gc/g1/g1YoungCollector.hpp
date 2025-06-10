@@ -76,7 +76,9 @@ class G1YoungCollector {
   G1SurvivorRegions* survivor_regions() const;
   ReferenceProcessor* ref_processor_stw() const;
   WorkerThreads* workers() const;
+#if ALLOCATION_FAILURE_INJECTOR
   G1YoungGCAllocationFailureInjector* allocation_failure_injector() const;
+#endif
 
   GCCause::Cause _gc_cause;
 
