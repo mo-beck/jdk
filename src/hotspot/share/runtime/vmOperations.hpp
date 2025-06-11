@@ -29,6 +29,7 @@
 #include "runtime/javaThread.hpp"
 #include "runtime/vmOperation.hpp"
 #include "runtime/threadSMR.hpp"
+#include "gc/g1/g1CollectedHeap.hpp"
 
 class ObjectMonitorsView;
 
@@ -290,5 +291,17 @@ class VM_PrintClassHierarchy: public VM_Operation {
   void doit();
 };
 #endif // INCLUDE_SERVICES
+
+class VM_G1ShrinkHeap : public VM_Operation {
+ private:
+  G1CollectedHeap* _g1h;
+  size_t _bytes;
+ public:
+  VM_G1ShrinkHeap(G1CollectedHeap* g1h, size_t bytes)
+    : _g1h(g1h), _bytes(bytes) {}
+  VMOp_Type type() const override { return VMOp_G1ShrinkHeap; }
+  const char* name() const override { return "G1ShrinkHeap"; }
+  void doit() override;
+};
 
 #endif // SHARE_RUNTIME_VMOPERATIONS_HPP

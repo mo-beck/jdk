@@ -119,6 +119,7 @@ void G1HeapRegion::unlink_from_list() {
 
 void G1HeapRegion::hr_clear(bool clear_space) {
   set_top(bottom());
+  record_activity(); // Record region initialization
   clear_young_index_in_cset();
   clear_index_in_opt_cset();
   uninstall_surv_rate_group();
@@ -238,18 +239,20 @@ G1HeapRegion::G1HeapRegion(uint hrm_index,
   _type(),
   _humongous_start_region(nullptr),
   _index_in_opt_cset(InvalidCSetIndex),
-  _next(nullptr), _prev(nullptr),
+  _next(nullptr),
+  _prev(nullptr),
 #ifdef ASSERT
   _containing_set(nullptr),
 #endif
   _parsable_bottom(nullptr),
-  _garbage_bytes(0),
+  _garbage_bytes(0), 
   _incoming_refs(0),
   _young_index_in_cset(-1),
   _surv_rate_group(nullptr),
   _age_index(G1SurvRateGroup::InvalidAgeIndex),
   _node_index(G1NUMA::UnknownNodeIndex),
-  _pinned_object_count(0)
+  _pinned_object_count(0),
+  _last_access_timestamp(os::javaTimeMillis()) // Initialize timestamp with milliseconds to match uncommit check
 {
   assert(Universe::on_page_boundary(mr.start()) && Universe::on_page_boundary(mr.end()),
          "invalid space boundaries");

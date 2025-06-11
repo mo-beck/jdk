@@ -248,6 +248,17 @@ HeapWord* G1Allocator::survivor_attempt_allocation(uint node_index,
   HeapWord* result = survivor_gc_alloc_region(node_index)->attempt_allocation(min_word_size,
                                                                               desired_word_size,
                                                                               actual_word_size);
+  // Record activity on successful allocation
+  if (result != nullptr) {
+    G1HeapRegion* hr = _g1h->heap_region_containing(result);
+    if (hr != nullptr) {
+      {
+        MutexLocker ml(Heap_lock, Mutex::_no_safepoint_check_flag);
+        hr->record_activity();
+      }
+    }
+  }
+
   if (result == nullptr && !survivor_is_full()) {
     MutexLocker x(FreeList_lock, Mutex::_no_safepoint_check_flag);
     // Multiple threads may have queued at the FreeList_lock above after checking whether there
