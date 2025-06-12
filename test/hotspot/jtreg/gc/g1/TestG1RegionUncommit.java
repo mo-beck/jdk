@@ -43,6 +43,25 @@ public class TestG1RegionUncommit {
         return Runtime.getRuntime().totalMemory();
     }
     
+    private static void waitForUncommit() throws Exception {
+        long startTime = System.currentTimeMillis();
+        long lastCommitted = getCommitted();
+        System.out.println("Waiting for uncommit...");
+        
+        // Wait up to 10 seconds, checking every 100ms for changes
+        for (int i = 0; i < 100; i++) {
+            Thread.sleep(100);
+            long currentCommitted = getCommitted();
+            if (currentCommitted < lastCommitted) {
+                System.out.println("Uncommit detected after " + (System.currentTimeMillis() - startTime) + "ms");
+                System.out.println("Memory uncommitted: " + (lastCommitted - currentCommitted) + " bytes");
+                return;
+            }
+            lastCommitted = currentCommitted;
+        }
+        throw new RuntimeException("No uncommit detected within 10 seconds");
+    }
+    
     public static void main(String[] args) throws Exception {
         // Initial allocation to force region commitment
         System.out.println("Initial allocation");
@@ -50,13 +69,14 @@ public class TestG1RegionUncommit {
         keepAlive = new byte[allocSize];
         long afterAlloc = getCommitted();
         
-        // Free memory and wait for uncommit
-        System.out.println("Freeing memory");
+        // Free memory and force GC
+        System.out.println("Freeing memory and forcing GC");
         keepAlive = null;
         System.gc();
+        System.gc(); // Double GC to ensure cleanup
         
-        // Wait longer than uncommit delay
-        Thread.sleep(2000);
+        // Wait for uncommit to occur
+        waitForUncommit();
         
         long afterUncommit = getCommitted();
         
@@ -66,7 +86,9 @@ public class TestG1RegionUncommit {
         System.out.println("After uncommit: " + afterUncommit);
         
         if (afterUncommit >= afterAlloc) {
-            throw new RuntimeException("Uncommit did not occur");
+            throw new RuntimeException("Uncommit did not occur. Before: " + beforeAlloc + 
+                                    ", After alloc: " + afterAlloc + 
+                                    ", After uncommit: " + afterUncommit);
         }
         
         // Allow heap to shrink by at most G1MinRegionsToUncommit * regionSize below initial size
