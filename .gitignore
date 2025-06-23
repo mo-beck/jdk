@@ -25,3 +25,8 @@ NashornProfile.txt
 **/core.[0-9]*
 *.rej
 *.orig
+
+# Test compilation artifacts
+test/hotspot/jtreg/gc/g1/*.class
+test/lib/jdk/test/lib/process/*.class
+configure.log

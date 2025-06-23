@@ -352,8 +352,9 @@ bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
   jlong last_access = hr->last_access_time();
   jlong elapsed = current_time - last_access;
 
-  log_trace(gc, sizing)("Region %u uncommit check: elapsed=%ldms threshold=%ldms last_access=%ld now=%ld",
-                     hr->hrm_index(), elapsed, (jlong)_uncommit_delay_ms, last_access, current_time);
+  log_trace(gc, sizing)("Region %u uncommit check: elapsed=%ldms threshold=%ldms last_access=%ld now=%ld empty=%s",
+                     hr->hrm_index(), elapsed, (jlong)_uncommit_delay_ms, last_access, current_time, 
+                     hr->is_empty() ? "true" : "false");
 
   bool should_uncommit = elapsed > (jlong)_uncommit_delay_ms;
   if (should_uncommit) {

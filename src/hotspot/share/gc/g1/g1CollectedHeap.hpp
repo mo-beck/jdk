@@ -74,6 +74,7 @@ class G1ConcurrentMarkThread;
 class G1ConcurrentRefine;
 class G1GCCounters;
 class G1GCPhaseTimes;
+class G1HeapEvaluationTask;
 class G1HeapSizingPolicy;
 class G1NewTracer;
 class G1RemSet;
