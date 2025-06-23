@@ -73,6 +73,7 @@ private:
                                  OldGCAllocRegion* old,
                                  G1HeapRegion** retained);
 
+  // Helper method to record region activity
   void record_region_activity(G1HeapRegion* hr) {
     if (hr != nullptr) {
       hr->record_activity();
@@ -128,6 +129,8 @@ public:
   // This is to be called when holding an appropriate lock. It first tries in the
   // current allocation region, and then attempts an allocation using a new region.
   inline HeapWord* attempt_allocation_locked(uint node_index, size_t word_size);
+
+  inline HeapWord* attempt_allocation_force(uint node_index, size_t word_size);
 
   size_t unsafe_max_tlab_alloc();
   size_t used_in_alloc_regions();

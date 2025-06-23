@@ -251,12 +251,7 @@ HeapWord* G1Allocator::survivor_attempt_allocation(uint node_index,
   // Record activity on successful allocation
   if (result != nullptr) {
     G1HeapRegion* hr = _g1h->heap_region_containing(result);
-    if (hr != nullptr) {
-      {
-        MutexLocker ml(Heap_lock, Mutex::_no_safepoint_check_flag);
-        hr->record_activity();
-      }
-    }
+    record_region_activity(hr);
   }
 
   if (result == nullptr && !survivor_is_full()) {
@@ -268,6 +263,11 @@ HeapWord* G1Allocator::survivor_attempt_allocation(uint node_index,
       result = survivor_gc_alloc_region(node_index)->attempt_allocation_locked(min_word_size,
                                                                                desired_word_size,
                                                                                actual_word_size);
+      // Record activity on successful locked allocation
+      if (result != nullptr) {
+        G1HeapRegion* hr = _g1h->heap_region_containing(result);
+        record_region_activity(hr);
+      }
       if (result == nullptr) {
         set_survivor_full();
       }
@@ -288,6 +288,11 @@ HeapWord* G1Allocator::old_attempt_allocation(size_t min_word_size,
   HeapWord* result = old_gc_alloc_region()->attempt_allocation(min_word_size,
                                                                desired_word_size,
                                                                actual_word_size);
+  // Record activity on successful allocation
+  if (result != nullptr) {
+    G1HeapRegion* hr = _g1h->heap_region_containing(result);
+    record_region_activity(hr);
+  }
   if (result == nullptr && !old_is_full()) {
     MutexLocker x(FreeList_lock, Mutex::_no_safepoint_check_flag);
     // Multiple threads may have queued at the FreeList_lock above after checking whether there
@@ -297,6 +302,11 @@ HeapWord* G1Allocator::old_attempt_allocation(size_t min_word_size,
       result = old_gc_alloc_region()->attempt_allocation_locked(min_word_size,
                                                                 desired_word_size,
                                                                 actual_word_size);
+      // Record activity on successful locked allocation
+      if (result != nullptr) {
+        G1HeapRegion* hr = _g1h->heap_region_containing(result);
+        record_region_activity(hr);
+      }
       if (result == nullptr) {
         set_old_full();
       }
@@ -380,10 +390,6 @@ HeapWord* G1PLABAllocator::allocate_direct_or_new_plab(G1HeapRegionAttr dest,
                                                        size_t word_sz,
                                                        bool* plab_refill_failed,
                                                        uint node_index) {
-  PLAB* alloc_buf = alloc_buffer(dest, node_index);
-  size_t words_remaining = alloc_buf->words_remaining();
-  assert(words_remaining < word_sz, "precondition");
-
   size_t plab_word_size = plab_size(dest.type());
   size_t next_plab_word_size = plab_word_size;
 
@@ -396,10 +402,13 @@ HeapWord* G1PLABAllocator::allocate_direct_or_new_plab(G1HeapRegionAttr dest,
   size_t required_in_plab = PLAB::size_required_for_allocation(word_sz);
 
   // Only get a new PLAB if the allocation fits into the to-be-allocated PLAB and
-  // retiring the current PLAB would not waste more than ParallelGCBufferWastePct
-  // in the current PLAB. Boosting the PLAB also increasingly allows more waste to occur.
+  // it would not waste more than ParallelGCBufferWastePct in the current PLAB.
+  // Boosting the PLAB also increasingly allows more waste to occur.
   if ((required_in_plab <= next_plab_word_size) &&
-    may_throw_away_buffer(words_remaining, plab_word_size)) {
+    may_throw_away_buffer(required_in_plab, plab_word_size)) {
+
+    PLAB* alloc_buf = alloc_buffer(dest, node_index);
+    guarantee(alloc_buf->words_remaining() <= required_in_plab, "must be");
 
     alloc_buf->retire();
 
