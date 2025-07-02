@@ -23,22 +23,33 @@
  */
 
 #include "gc/g1/g1CollectedHeap.hpp"
+#include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
+#include "runtime/globals.hpp"
+#include "utilities/debug.hpp"
+#include "utilities/globalDefinitions.hpp"
 
 G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy) :
-  G1ServiceTask("G1 Heap Evaluation Task"),
+  PeriodicTask(G1TimeBasedEvaluationIntervalMillis),  // Use PeriodicTask with interval
   _g1h(g1h),
   _heap_sizing_policy(heap_sizing_policy) {
 }
 
-void G1HeapEvaluationTask::execute() {
+void G1HeapEvaluationTask::task() { 
+  // This runs on WatcherThread during idle periods - perfect for time-based evaluation!
   log_debug(gc, sizing)("Starting heap evaluation");
 
   if (!G1UseTimeBasedHeapSizing) {
+    return;
+  }
+
+  // Ensure we're not running during GC activity
+  if (_g1h->is_stw_gc_active()) {
+    log_trace(gc, sizing)("GC active, skipping time-based evaluation");
     return;
   }
 
@@ -48,15 +59,23 @@ void G1HeapEvaluationTask::execute() {
   size_t resize_amount = _heap_sizing_policy->evaluate_heap_resize(should_expand);
   
   if (resize_amount > 0) {
+    // Time-based evaluation only handles uncommit/shrinking, never expansion
     if (should_expand) {
-      log_debug(gc, sizing)("Expanding heap by %zu bytes", resize_amount);
-      _g1h->expand(resize_amount, _g1h->workers());
+      log_warning(gc, sizing)("Time-based evaluation unexpected expansion request ignored (resize_amount=%zuB)", resize_amount);
+      // This should not happen since time-based policy only handles uncommit
+      assert(false, "Time-based heap sizing should never request expansion");
     } else {
-      log_debug(gc, sizing)("Shrinking heap by %zu bytes", resize_amount); 
+      log_info(gc, sizing)("Time-based evaluation: shrinking heap by %zuMB", resize_amount / M);
+      log_debug(gc, sizing)("Time-based evaluation recommends shrinking by %zuB", resize_amount); 
       _g1h->request_heap_shrink(resize_amount);
+    }
+  } else {
+    // Periodic info log for ongoing evaluation activity (less frequent)
+    static int evaluation_count = 0;
+    if (++evaluation_count % 10 == 0) { // Log every 10th evaluation when no action taken
+      log_info(gc, sizing)("Time-based evaluation: no heap uncommit needed (evaluation #%d)", evaluation_count);
     }
   }
 
-  schedule(G1TimeBasedEvaluationIntervalMillis);
+  // No need to schedule - PeriodicTask automatically reschedules itself!
 }
-

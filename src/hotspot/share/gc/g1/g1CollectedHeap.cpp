@@ -39,6 +39,7 @@
 #include "gc/g1/g1ConcurrentRefine.hpp"
 #include "gc/g1/g1ConcurrentRefineThread.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"  // Include this first to avoid include cycle
+#include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1DirtyCardQueue.hpp"
 #include "gc/g1/g1EvacStats.inline.hpp"
 #include "gc/g1/g1FullCollector.hpp"
@@ -1048,10 +1049,15 @@ void G1CollectedHeap::shrink_helper(size_t shrink_bytes) {
   uint num_regions_removed = _hrm.shrink_by(num_regions_to_remove);
   size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
 
-  log_debug(gc, ergo, heap)("Shrink the heap. requested shrinking amount: %zuB aligned shrinking amount: %zuB actual amount shrunk: %zuB",
-                            shrink_bytes, aligned_shrink_bytes, shrunk_bytes);
+  log_debug(gc, ergo, heap)("Shrink the heap. requested shrinking amount: %zuB aligned shrinking amount: %zuB attempted shrinking amount: %zuB",
+                           shrink_bytes, aligned_shrink_bytes, shrunk_bytes);
   if (num_regions_removed > 0) {
-    log_debug(gc, heap)("Uncommittable regions after shrink: %u", num_regions_removed);
+    log_info(gc, heap)("Heap shrink completed: uncommitted %u regions (%zuMB), heap size now %zuMB",
+                       num_regions_removed, shrunk_bytes / M, capacity() / M);
+    log_debug(gc, heap)("Heap shrink details: requested=%zuB aligned=%zuB attempted=%zuB actual=%zuB "
+                        "regions_removed=%u heap_capacity=%zuB",
+                        shrink_bytes, aligned_shrink_bytes, num_regions_to_remove * G1HeapRegion::GrainBytes,
+                        shrunk_bytes, num_regions_removed, capacity());
     policy()->record_new_heap_size(num_committed_regions());
   } else {
     log_debug(gc, ergo, heap)("Did not shrink the heap (heap shrinking operation failed)");
@@ -1205,6 +1211,7 @@ G1CollectedHeap::G1CollectedHeap() :
   _allocator = new G1Allocator(this);
 
   _heap_sizing_policy = G1HeapSizingPolicy::create(this, _policy->analytics());
+  _heap_sizing_policy->initialize();
 
   _humongous_object_threshold_in_words = humongous_threshold_for(G1HeapRegion::GrainWords);
 
@@ -1450,9 +1457,13 @@ jint G1CollectedHeap::initialize() {
   _free_arena_memory_task = new G1MonotonicArenaFreeMemoryTask("Card Set Free Memory Task");
   _service_thread->register_task(_free_arena_memory_task);
 
+  // Create the heap evaluation task using PeriodicTask (safer for virtual threads)
   if (G1UseTimeBasedHeapSizing) {
     _heap_evaluation_task = new G1HeapEvaluationTask(this, _heap_sizing_policy);
-    _service_thread->register_task(_heap_evaluation_task);
+    // PeriodicTask will be enrolled after G1 is fully initialized in post_initialize()
+    log_debug(gc, init)("G1 Time-Based Heap Evaluation task created (PeriodicTask)");
+  } else {
+    _heap_evaluation_task = nullptr;
   }
 
   // Here we allocate the dummy G1HeapRegion that is required by the G1AllocRegion class
@@ -1513,6 +1524,12 @@ void G1CollectedHeap::safepoint_synchronize_end() {
 void G1CollectedHeap::post_initialize() {
   CollectedHeap::post_initialize();
   ref_processing_init();
+  
+  // Enroll the heap evaluation task after G1 is fully initialized
+  if (G1UseTimeBasedHeapSizing && _heap_evaluation_task != nullptr) {
+    _heap_evaluation_task->enroll();  // PeriodicTask enroll() starts the task
+    log_debug(gc, init)("G1 Time-Based Heap Evaluation task enrolled (PeriodicTask)");
+  }
 }
 
 void G1CollectedHeap::ref_processing_init() {
@@ -2898,7 +2915,8 @@ void G1CollectedHeap::retire_mutator_alloc_region(G1HeapRegion* alloc_region,
   assert_heap_locked_or_at_safepoint(true /* should_be_vm_thread */);
   assert(alloc_region->is_eden(), "all mutator alloc regions should be eden");
 
-  alloc_region->record_activity(); // Update region access time
+  alloc_region->record_activity();  // Record the activity of the alloc region
+
   collection_set()->add_eden_region(alloc_region);
   increase_used(allocated_bytes);
   _eden.add_used_bytes(allocated_bytes);
@@ -2960,6 +2978,8 @@ G1HeapRegion* G1CollectedHeap::new_gc_alloc_region(size_t word_size, G1HeapRegio
 void G1CollectedHeap::retire_gc_alloc_region(G1HeapRegion* alloc_region,
                                              size_t allocated_bytes,
                                              G1HeapRegionAttr dest) {
+  alloc_region->record_activity();  // Record the activity of the alloc region
+  
   _bytes_used_during_gc += allocated_bytes;
   if (dest.is_old()) {
     old_set_add(alloc_region);
@@ -3093,20 +3113,4 @@ void G1CollectedHeap::prepare_group_cardsets_for_scan() {
 
   collection_set()->prepare_groups_for_scan();
 }
-
-bool G1CollectedHeap::check_region_for_uncommit(G1HeapRegion* hr) {
-  // First check if region is empty
-  if (!hr->is_empty()) {
-    log_trace(gc, heap)("Region %u not eligible for uncommit - not empty", hr->hrm_index());
-    return false;
-  }
-
-  bool should_uncommit = hr->should_uncommit(G1HeapSizingPolicy::uncommit_delay());
-  
-  log_trace(gc, heap)("Region %u uncommit check: empty=%d should_uncommit=%d", 
-                      hr->hrm_index(), hr->is_empty(), should_uncommit);
-                      
-  return should_uncommit;
-}
-
 

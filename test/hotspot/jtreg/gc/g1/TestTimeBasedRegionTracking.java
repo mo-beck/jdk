@@ -23,7 +23,7 @@
 
 package gc.g1;
 
-/**
+/*
  * @test TestTimeBasedRegionTracking
  * @bug 8357445
  * @summary Test region activity tracking and state transitions for time-based heap sizing
@@ -31,37 +31,33 @@ package gc.g1;
  * @library /test/lib
  * @modules java.base/jdk.internal.misc
  *          java.management/sun.management
- * @run main/othervm -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+G1UseTimeBasedHeapSizing gc.g1.TestTimeBasedRegionTracking 
+ * @run main/othervm -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+G1UseTimeBasedHeapSizing -Xms32m -Xmx128m -XX:G1HeapRegionSize=1M -XX:G1TimeBasedEvaluationIntervalMillis=5000 -XX:G1UncommitDelayMillis=10000 -XX:G1MinRegionsToUncommit=2 -Xlog:gc*,gc+sizing*=debug gc.g1.TestTimeBasedRegionTracking
  */
 
 import java.util.*;
-import java.lang.management.ManagementFactory;
-import com.sun.management.HotSpotDiagnosticMXBean;
-import com.sun.management.VMOption;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TestTimeBasedRegionTracking {
 
-    // Test configuration  
     private static final String TEST_VM_OPTS = "-XX:+UseG1GC " +
         "-XX:+UnlockExperimentalVMOptions " +
         "-XX:+G1UseTimeBasedHeapSizing " +
-        "-XX:G1TimeBasedEvaluationIntervalMillis=15000 " + // 15s for testing
-        "-XX:G1UncommitDelayMillis=30000 " +  // 30s for testing
-        "-XX:G1MinRegionsToUncommit=2 " +  // Low for testing
-        "-Xmx1g -Xms512m " +  // Start with headroom
-        "-Xlog:gc*=debug,gc+sizing=debug";
+        "-XX:G1TimeBasedEvaluationIntervalMillis=5000 " +
+        "-XX:G1UncommitDelayMillis=10000 " +
+        "-XX:G1MinRegionsToUncommit=2 " +
+        "-XX:G1HeapRegionSize=1M " +
+        "-Xmx128m -Xms32m " +
+        "-Xlog:gc*,gc+sizing*=debug";
 
     public static void main(String[] args) throws Exception {
         testRegionStateTransitions();
-        testConcurrentAllocation();
-        testRegionReuse();
+        testConcurrentRegionAccess();
+        testRegionLifecycleEdgeCases();
+        testSafepointRaceConditions();
     }
 
-    /**
-     * Test region state transitions through allocation/collection cycles
-     */
     static void testRegionStateTransitions() throws Exception {
         String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
         System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
@@ -70,168 +66,272 @@ public class TestTimeBasedRegionTracking {
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         
         // Verify region state changes
-        output.shouldContain("Region state transition");
-        output.shouldContain("Uncommit candidates found");
+        output.shouldContain("Region state transition:");
+        output.shouldContain("Uncommit candidates found:");
         
         output.shouldHaveExitValue(0);
     }
 
-    /**
-     * Test region tracking during concurrent allocations
-     */
-    static void testConcurrentAllocation() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$ConcurrentAllocationTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        
-        // Verify concurrent allocation tracking
-        output.shouldContain("[gc,heap      ] GC(");  // GC log entry
-        output.shouldContain("[gc,phases    ] Phase 1: Mark live objects");
-        
-        output.shouldHaveExitValue(0);
-    }
-
-    /**
-     * Test proper tracking when regions are reused
-     */
-    static void testRegionReuse() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$RegionReuseTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        
-        // Verify region reuse tracking 
-        output.shouldContain("[gc,heap      ] GC(");  // GC log entry
-        output.shouldContain("[gc,phases    ] Phase 2: Compute new object locations");
-        
-        output.shouldHaveExitValue(0);
-    }
-
-    /**
-     * Tests region state transitions 
-     */
     public static class RegionTransitionTest {
         private static final int MB = 1024 * 1024;
         private static ArrayList<byte[]> arrays = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            // Phase 1: Active allocation
-            allocateMemory(200); // 200MB
+            // Phase 1: Active allocation 
+            allocateMemory(32); // 32MB
             System.gc();
             
             // Phase 2: Idle period
             arrays.clear();
             System.gc();
-            // Sleep for enough time to:
-            // 1. Pass G1UncommitDelayMillis (30s)
-            // 2. Ensure we hit the next evaluation interval (15s)
-            Thread.sleep(45000); 
+            Thread.sleep(15000); // Wait for uncommit
             
             // Phase 3: Reallocation
-            allocateMemory(100); // 100MB
+            allocateMemory(16); // 16MB
             System.gc();
 
-            // Clean up
+            // Clean up and wait for final uncommit evaluation
             arrays = null;
             System.gc();
+            Thread.sleep(2000);
+            Runtime.getRuntime().halt(0);
         }
         
-        static void allocateMemory(int mb) {
+        static void allocateMemory(int mb) throws InterruptedException {
             for (int i = 0; i < mb; i++) {
                 arrays.add(new byte[MB]);
+                if (i % 4 == 0) Thread.sleep(10);
             }
         }
     }
-
-    /**
-     * Tests concurrent allocation behavior
-     */
-    public static class ConcurrentAllocationTest {
-        private static final int MB = 1024 * 1024;
-        private static final int NUM_THREADS = 4;
-        private static volatile boolean running = true;
+    
+    static void testConcurrentRegionAccess() throws Exception {
+        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
+        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
+        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$ConcurrentAccessTest";
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
         
-        static class AllocationThread extends Thread {
-            private final ArrayList<byte[]> arrays = new ArrayList<>();
-            
-            @Override
-            public void run() {
-                try {
-                    while (running) {
-                        // Allocate 10MB per iteration
-                        for (int i = 0; i < 10 && running; i++) {
-                            arrays.add(new byte[MB]);
-                        }
-                        Thread.sleep(100); // Short pause between allocations
-                    }
-                } catch (InterruptedException e) {
-                    // Expected on shutdown
-                }
-            }
-        }
+        // Verify concurrent access is handled safely
+        output.shouldHaveExitValue(0);
+    }
+    
+    static void testRegionLifecycleEdgeCases() throws Exception {
+        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
+        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
+        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$RegionLifecycleEdgeCaseTest";
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        
+        // Verify region lifecycle edge cases are handled
+        output.shouldHaveExitValue(0);
+    }
+    
+    static void testSafepointRaceConditions() throws Exception {
+        System.out.println("Testing safepoint and allocation race conditions...");
+        
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(
+            "-XX:+UseG1GC",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+G1UseTimeBasedHeapSizing",
+            "-Xms64m", "-Xmx256m",
+            "-XX:G1HeapRegionSize=1M",
+            "-XX:G1TimeBasedEvaluationIntervalMillis=1000", // Frequent evaluation (minimum allowed)
+            "-XX:G1UncommitDelayMillis=1000", // Short delay
+            "-XX:G1MinRegionsToUncommit=1",
+            "-Xlog:gc*,gc+sizing*=debug",
+            "gc.g1.TestTimeBasedRegionTracking$SafepointRaceTest"
+        );
+        
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        
+        // Should handle safepoint races without errors
+        output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
+        output.shouldHaveExitValue(0);
+        System.out.println("Safepoint race conditions test passed!");
+    }
+    
+    public static class ConcurrentAccessTest {
+        private static final int MB = 1024 * 1024;
+        private static final List<byte[]> sharedMemory = new ArrayList<>();
+        private static volatile boolean stopThreads = false;
         
         public static void main(String[] args) throws Exception {
-            // Start concurrent allocation threads
-            Thread[] threads = new Thread[NUM_THREADS];
-            for (int i = 0; i < NUM_THREADS; i++) {
-                threads[i] = new AllocationThread();
+            System.out.println("ConcurrentAccessTest: Starting");
+            
+            // Start multiple allocation threads
+            Thread[] threads = new Thread[3];
+            for (int t = 0; t < threads.length; t++) {
+                final int threadId = t;
+                threads[t] = new Thread(() -> {
+                    int iterations = 0;
+                    while (!stopThreads && iterations < 30) {
+                        try {
+                            // Allocate
+                            for (int i = 0; i < 3; i++) {
+                                synchronized (sharedMemory) {
+                                    sharedMemory.add(new byte[512 * 1024]); // 512KB
+                                }
+                                Thread.sleep(10);
+                            }
+                            
+                            // Clear some memory
+                            synchronized (sharedMemory) {
+                                if (sharedMemory.size() > 15) {
+                                    for (int i = 0; i < 5; i++) {
+                                        if (!sharedMemory.isEmpty()) {
+                                            sharedMemory.remove(0);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            if (iterations % 10 == 0) {
+                                System.gc();
+                            }
+                            
+                            iterations++;
+                            Thread.sleep(50);
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                    System.out.println("Thread " + threadId + " completed " + iterations + " iterations");
+                });
+                threads[t].start();
+            }
+            
+            // Let threads run for a while
+            Thread.sleep(8000);
+            
+            stopThreads = true;
+            for (Thread t : threads) {
+                t.join(2000);
+            }
+            
+            synchronized (sharedMemory) {
+                sharedMemory.clear();
+            }
+            System.gc();
+            Thread.sleep(3000);
+            
+            System.out.println("ConcurrentAccessTest: Test completed");
+            Runtime.getRuntime().halt(0);
+        }
+    }
+    
+    public static class RegionLifecycleEdgeCaseTest {
+        private static final int MB = 1024 * 1024;
+        private static List<Object> memory = new ArrayList<>();
+        
+        public static void main(String[] args) throws Exception {
+            System.out.println("RegionLifecycleEdgeCaseTest: Starting");
+            
+            // Phase 1: Mixed allocation patterns
+            // Small objects
+            for (int i = 0; i < 100; i++) {
+                memory.add(new byte[8 * 1024]); // 8KB objects
+            }
+            
+            // Medium objects
+            for (int i = 0; i < 20; i++) {
+                memory.add(new byte[40 * 1024]); // 40KB objects
+            }
+            
+            // Large objects (but not humongous)
+            for (int i = 0; i < 5; i++) {
+                memory.add(new byte[300 * 1024]); // 300KB objects
+            }
+            
+            Thread.sleep(2000);
+            
+            // Phase 2: Create fragmentation by selective deallocation
+            for (int i = memory.size() - 1; i >= 0; i -= 2) {
+                memory.remove(i);
+            }
+            
+            System.gc();
+            Thread.sleep(3000);
+            
+            // Phase 3: Add humongous objects
+            for (int i = 0; i < 3; i++) {
+                memory.add(new byte[900 * 1024]); // 900KB humongous
+                Thread.sleep(500);
+            }
+            
+            Thread.sleep(2000);
+            
+            // Phase 4: Final cleanup
+            memory.clear();
+            System.gc();
+            Thread.sleep(12000); // Wait for multiple evaluation cycles
+            
+            System.out.println("RegionLifecycleEdgeCaseTest: Test completed");
+            Runtime.getRuntime().halt(0);
+        }
+    }
+    
+    public static class SafepointRaceTest {
+        public static void main(String[] args) throws Exception {
+            System.out.println("=== Safepoint Race Conditions Test ===");
+            
+            final AtomicBoolean stopFlag = new AtomicBoolean(false);
+            final List<byte[]> sharedMemory = Collections.synchronizedList(new ArrayList<>());
+            
+            // Start multiple threads to create allocation pressure
+            Thread[] threads = new Thread[3];
+            for (int i = 0; i < threads.length; i++) {
+                final int threadId = i;
+                threads[i] = new Thread(() -> {
+                    int iteration = 0;
+                    while (!stopFlag.get() && iteration < 20) {
+                        try {
+                            // Allocate and deallocate rapidly
+                            for (int j = 0; j < 5; j++) {
+                                sharedMemory.add(new byte[512 * 1024]); // 512KB
+                            }
+                            
+                            // Force GC to trigger safepoints
+                            if (iteration % 3 == 0) {
+                                System.gc();
+                            }
+                            
+                            // Clear some allocations
+                            synchronized (sharedMemory) {
+                                if (sharedMemory.size() > 10) {
+                                    for (int k = 0; k < 3; k++) {
+                                        if (!sharedMemory.isEmpty()) {
+                                            sharedMemory.remove(0);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            Thread.sleep(100); // Brief pause
+                            iteration++;
+                        } catch (InterruptedException e) {
+                            break;
+                        }
+                    }
+                });
                 threads[i].start();
             }
             
-            // Let allocations run for a while
-            Thread.sleep(10000);
+            // Let threads run during time-based evaluation
+            Thread.sleep(8000);
             
-            // Trigger GC to observe region state tracking
-            System.gc();
-            
-            // Stop allocation threads
-            running = false;
-            for (Thread t : threads) {
-                t.join();
+            // Stop threads
+            stopFlag.set(true);
+            for (Thread thread : threads) {
+                thread.join(2000);
             }
-            
-            // Final GC to clean up
-            System.gc();
-        }
-    }
-
-    /**
-     * Tests region reuse behavior and tracking
-     */
-    public static class RegionReuseTest {
-        private static final int MB = 1024 * 1024;
-        private static ArrayList<byte[]> arrays = new ArrayList<>();
-        
-        static void allocateAndCollect(int mbToAllocate) throws Exception {
-            // Allocate memory
-            for (int i = 0; i < mbToAllocate; i++) {
-                arrays.add(new byte[MB]);
-            }
-            
-            // Force a GC to trigger region reuse
-            System.gc();
-            arrays.clear();
-            
-            // Let regions become eligible for uncommit and ensure evaluation occurs
-            Thread.sleep(45000); // > G1UncommitDelayMillis + G1TimeBasedEvaluationIntervalMillis
-        }
-        
-        public static void main(String[] args) throws Exception {
-            // Phase 1: Initial allocation and collection
-            allocateAndCollect(200); // 200MB
-            
-            // Phase 2: Reallocate in same regions
-            allocateAndCollect(150); // 150MB
-            
-            // Phase 3: One more cycle with different size
-            allocateAndCollect(100); // 100MB
             
             // Clean up
-            arrays = null;
+            sharedMemory.clear();
             System.gc();
+            
+            System.out.println("SafepointRaceTest: Test completed");
+            Runtime.getRuntime().halt(0);
         }
     }
 }

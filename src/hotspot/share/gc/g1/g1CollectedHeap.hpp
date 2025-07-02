@@ -569,8 +569,6 @@ public:
   // Immediately uncommit uncommittable regions.
   uint uncommit_regions(uint region_limit);
   bool has_uncommittable_regions();
-  // Check if a region can be uncommitted based on emptiness and usage threshold
-  bool check_region_for_uncommit(G1HeapRegion* hr);
 
   G1NUMA* numa() const { return _numa; }
 
@@ -924,6 +922,8 @@ public:
 
   // The current policy object for the collector.
   G1Policy* policy() const { return _policy; }
+  // The heap sizing policy.
+  G1HeapSizingPolicy* heap_sizing_policy() const { return _heap_sizing_policy; }
   // The remembered set.
   G1RemSet* rem_set() const { return _rem_set; }
 
@@ -975,7 +975,6 @@ public:
   // allocation, via inlined code (by exporting the address of the top and
   // end fields defining the extent of the contiguous allocation region.)
   // But G1CollectedHeap doesn't yet support this.
-
 
   // Returns true if an incremental GC should be upgrade to a full gc. This
   // is done when there are no free regions and the heap can't be expanded.

@@ -301,6 +301,7 @@ class VM_G1ShrinkHeap : public VM_Operation {
     : _g1h(g1h), _bytes(bytes) {}
   VMOp_Type type() const override { return VMOp_G1ShrinkHeap; }
   const char* name() const override { return "G1ShrinkHeap"; }
+  bool is_gc_operation() const override { return true; }
   void doit() override;
 };
 

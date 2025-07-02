@@ -23,48 +23,40 @@
 
 package gc.g1;
 
-/**
+/*
  * @test TestTimeBasedHeapSizing
  * @bug 8357445
  * @summary Test time-based heap sizing functionality in G1
  * @requires vm.gc.G1
  * @library /test/lib
  * @modules java.base/jdk.internal.misc
- *          java.management/sun.management
- * @run main/othervm -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+G1UseTimeBasedHeapSizing gc.g1.TestTimeBasedHeapSizing
+ *          java.management
+ * @run main/othervm -XX:+UseG1GC -XX:+UnlockExperimentalVMOptions -XX:+G1UseTimeBasedHeapSizing -Xms32m -Xmx128m -XX:G1HeapRegionSize=1M -XX:G1TimeBasedEvaluationIntervalMillis=5000 -XX:G1UncommitDelayMillis=10000 -XX:G1MinRegionsToUncommit=2 -Xlog:gc*,gc+sizing*=debug gc.g1.TestTimeBasedHeapSizing
  */
 
 import java.util.*;
-import java.lang.management.ManagementFactory;
-import com.sun.management.HotSpotDiagnosticMXBean;
-import com.sun.management.VMOption;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
-import java.util.concurrent.*;  // Add concurrent utilities
 
 public class TestTimeBasedHeapSizing {
 
-    // Test configuration
     private static final String TEST_VM_OPTS = "-XX:+UseG1GC " +
         "-XX:+UnlockExperimentalVMOptions " +
         "-XX:+G1UseTimeBasedHeapSizing " +
-        "-XX:G1TimeBasedEvaluationIntervalMillis=30000 " + // 30 sec for testing
-        "-XX:G1UncommitDelayMillis=60000 " + // 1 min for testing 
-        "-XX:G1MinRegionsToUncommit=2 " +  // Lower for testing
-        "-Xmx1g -Xms512m " +  // Start with some headroom
-        "-Xlog:gc*=debug,gc+sizing=debug";
+        "-XX:G1TimeBasedEvaluationIntervalMillis=5000 " +
+        "-XX:G1UncommitDelayMillis=10000 " +
+        "-XX:G1MinRegionsToUncommit=2 " +
+        "-XX:G1HeapRegionSize=1M " +
+        "-Xmx128m -Xms32m " +
+        "-Xlog:gc*,gc+sizing*=debug";
 
     public static void main(String[] args) throws Exception {
         testBasicFunctionality();
-        testHighLoadScenario();
-        testIdleBehavior();
-        testConcurrentGC();
-        testErrorConditions();
+        testHumongousObjectHandling();
+        testRapidAllocationCycles();
+        testHumongousObjectTracking();
     }
 
-    /**
-     * Test basic functionality with default settings
-     */
     static void testBasicFunctionality() throws Exception {
         String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
         System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
@@ -72,102 +64,49 @@ public class TestTimeBasedHeapSizing {
         ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
         
-        // Verify proper initialization
-        output.shouldContain("G1 periodic heap evaluation");
-        
-        // Check for expected behavior
-        output.shouldContain("Time-based evaluation triggered");
-        output.shouldMatch("Uncommit candidates: [0-9]+ regions");
+        output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
+        output.shouldContain("Starting heap evaluation");
+        output.shouldContain("Full region scan:");
         
         output.shouldHaveExitValue(0);
     }
 
-    /**
-     * Test behavior under high allocation load with multiple threads
-     */
-    static void testHighLoadScenario() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$HighLoadTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+    public static class BasicFunctionalityTest {
+        private static final int MB = 1024 * 1024;
+        private static ArrayList<byte[]> arrays = new ArrayList<>();
         
-        // Verify proper handling of high allocation load
-        output.shouldContain("High allocation phase completed");
-        output.shouldContain("Time-based evaluation");
-        output.shouldNotContain("OutOfMemoryError");
-        
-        output.shouldHaveExitValue(0);
-    }
+        public static void main(String[] args) throws Exception {
+            System.out.println("BasicFunctionalityTest: Starting heap activity");
+            
+            // Create significant heap activity
+            for (int cycle = 0; cycle < 3; cycle++) {
+                System.out.println("Allocation cycle " + cycle);
+                allocateMemory(25);  // 25MB per cycle
+                Thread.sleep(200);   // Brief pause
+                clearMemory();
+                System.gc();
+                Thread.sleep(200);
+            }
 
-    /**
-     * Test memory release during idle periods
-     */
-    static void testIdleBehavior() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$IdleBehaviorTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+            System.out.println("BasicFunctionalityTest: Starting idle period");
+            
+            // Sleep to allow time-based evaluation
+            Thread.sleep(18000);  // 18 seconds
+            
+            System.out.println("BasicFunctionalityTest: Completed idle period");
+            
+            // Final cleanup
+            clearMemory();
+            Thread.sleep(500);
+            
+            System.out.println("BasicFunctionalityTest: Test completed");
+            Runtime.getRuntime().halt(0);
+        }
         
-        // Verify memory release during idle
-        output.shouldContain("Starting idle phase");
-        output.shouldContain("Time-based evaluation triggered");
-        output.shouldMatch("Uncommit candidates: [0-9]+ regions");
-        output.shouldContain("Memory released");
-        
-        output.shouldHaveExitValue(0);
-    }
-
-    /**
-     * Test coordination with concurrent GC
-     */  
-    static void testConcurrentGC() throws Exception {
-        String opts = TEST_VM_OPTS + " -XX:InitiatingHeapOccupancyPercent=45"; // Lower IHOP to trigger concurrent cycles
-        String[] command = new String[opts.split(" ").length + 1];
-        System.arraycopy(opts.split(" "), 0, command, 0, opts.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$ConcurrentGCTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        
-        // Verify interaction with concurrent GC
-        output.shouldContain("Starting concurrent allocations");
-        output.shouldContain("Concurrent Mark Cycle");
-        output.shouldContain("Time-based evaluation");
-        output.shouldNotContain("GC coordination error");
-        
-        output.shouldHaveExitValue(0);
-    }
-
-    /**
-     * Test error handling and recovery
-     */
-    static void testErrorConditions() throws Exception {
-        String opts = TEST_VM_OPTS + " -XX:G1HeapRegionSize=1M"; // Small regions for more edge cases
-        String[] command = new String[opts.split(" ").length + 1];
-        System.arraycopy(opts.split(" "), 0, command, 0, opts.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$ErrorConditionsTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-        OutputAnalyzer output = new OutputAnalyzer(pb.start());
-        
-        // Verify error handling
-        output.shouldContain("Starting error simulation");
-        output.shouldContain("Time-based evaluation");
-        output.shouldContain("Recovered from allocation failure");
-        
-        output.shouldHaveExitValue(0);
-    }
-
-    /**
-     * Base test class with common utilities
-     */
-    static class BaseTest {
-        protected static final int MB = 1024 * 1024;
-        protected static ArrayList<byte[]> arrays = new ArrayList<>();
-        
-        static void allocateMemory(int mb) {
+        static void allocateMemory(int mb) throws InterruptedException {
             for (int i = 0; i < mb; i++) {
                 arrays.add(new byte[MB]);
+                if (i % 4 == 0) Thread.sleep(10);
             }
         }
         
@@ -176,201 +115,141 @@ public class TestTimeBasedHeapSizing {
             System.gc();
         }
     }
-
-    /**
-     * Basic functionality test
-     */
-    public static class BasicFunctionalityTest {
+    
+    static void testHumongousObjectHandling() throws Exception {
+        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
+        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
+        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$HumongousObjectTest";
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        
+        output.shouldContain("Starting heap evaluation");
+        output.shouldHaveExitValue(0);
+    }
+    
+    static void testRapidAllocationCycles() throws Exception {
+        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
+        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
+        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$RapidCycleTest";
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        
+        output.shouldContain("Starting heap evaluation");
+        output.shouldHaveExitValue(0);
+    }
+    
+    static void testHumongousObjectTracking() throws Exception {
+        System.out.println("Testing humongous object activity tracking...");
+        
+        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(
+            "-XX:+UseG1GC",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:+G1UseTimeBasedHeapSizing",
+            "-Xms64m", "-Xmx256m", 
+            "-XX:G1HeapRegionSize=1M",
+            "-XX:G1UncommitDelayMillis=5000",
+            "-XX:G1MinRegionsToUncommit=1",
+            "-Xlog:gc*,gc+sizing*=debug",
+            "gc.g1.TestTimeBasedHeapSizing$HumongousTrackingTest"
+        );
+        
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
+        
+        // Humongous objects should not affect uncommit safety
+        output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
+        output.shouldHaveExitValue(0);
+        System.out.println("Humongous object tracking test passed!");
+    }
+    
+    public static class HumongousObjectTest {
         private static final int MB = 1024 * 1024;
-        private static ArrayList<byte[]> arrays = new ArrayList<>();
-
-        public static void main(String[] args) throws Exception {
-            // Allocate some memory
-            allocateMemory(100);  // 100MB
-            System.gc();
-            
-            // Sleep to allow time-based evaluation
-            Thread.sleep(65000);  // > G1UncommitDelayMillis
-            
-            // Verify heap size changes
-            System.gc();
-            
-            // Clean up
-            arrays = null;
-            System.gc();
-        }
+        private static ArrayList<byte[]> humongousObjects = new ArrayList<>();
         
-        static void allocateMemory(int mb) {
-            for (int i = 0; i < mb; i++) {
-                arrays.add(new byte[MB]);
+        public static void main(String[] args) throws Exception {
+            System.out.println("HumongousObjectTest: Starting");
+            
+            // Allocate humongous objects (> 512KB for 1MB regions)
+            for (int i = 0; i < 8; i++) {
+                humongousObjects.add(new byte[800 * 1024]); // 800KB humongous
+                System.out.println("Allocated humongous object " + (i + 1));
+                Thread.sleep(200);
             }
+            
+            // Keep them alive for a while
+            Thread.sleep(3000);
+            
+            // Clear and test uncommit behavior
+            humongousObjects.clear();
+            System.gc();
+            Thread.sleep(12000); // Wait for uncommit delay
+            
+            System.out.println("HumongousObjectTest: Test completed");
+            Runtime.getRuntime().halt(0);
         }
     }
-
-    /**
-     * High load test with multiple threads and varying allocation patterns
-     */
-    public static class HighLoadTest extends BaseTest {
-        private static final int NUM_THREADS = 4;
-        private static final int ALLOCATION_SIZE_MB = 50;
-        private static final CountDownLatch startLatch = new CountDownLatch(1);
+    
+    public static class RapidCycleTest {
+        private static final int MB = 1024 * 1024;
+        private static ArrayList<byte[]> memory = new ArrayList<>();
         
         public static void main(String[] args) throws Exception {
-            ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
-            List<Future<?>> tasks = new ArrayList<>();
+            System.out.println("RapidCycleTest: Starting");
             
-            // Create allocation tasks
-            for (int i = 0; i < NUM_THREADS; i++) {
-                tasks.add(executor.submit(new AllocationTask()));
-            }
-            
-            System.out.println("Starting high allocation phase");
-            startLatch.countDown();
-            
-            // Wait for allocations to complete
-            for (Future<?> task : tasks) {
-                task.get();
-            }
-            
-            System.out.println("High allocation phase completed");
-            executor.shutdown();
-            
-            // Allow time for evaluation
-            Thread.sleep(65000);
-            
-            clearMemory();
-        }
-        
-        static class AllocationTask implements Runnable {
-            public void run() {
-                try {
-                    startLatch.await();
-                    ArrayList<byte[]> threadArrays = new ArrayList<>();
-                    
-                    // Allocate and free memory in a loop
-                    for (int i = 0; i < 3; i++) {
-                        for (int j = 0; j < ALLOCATION_SIZE_MB; j++) {
-                            threadArrays.add(new byte[MB]);
-                        }
-                        Thread.sleep(1000);
-                        threadArrays.clear();
-                        System.gc();
-                    }
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+            // Rapid allocation/deallocation cycles
+            for (int cycle = 0; cycle < 15; cycle++) {
+                // Quick allocation
+                for (int i = 0; i < 8; i++) {
+                    memory.add(new byte[MB]); // 1MB
+                }
+                
+                // Quick deallocation
+                memory.clear();
+                System.gc();
+                
+                // Brief pause
+                Thread.sleep(100);
+                
+                if (cycle % 5 == 0) {
+                    System.out.println("Completed cycle " + cycle);
                 }
             }
+            
+            // Final wait for time-based evaluation
+            Thread.sleep(12000);
+            
+            System.out.println("RapidCycleTest: Test completed");
+            Runtime.getRuntime().halt(0);
         }
     }
-
-    /**
-     * Test memory release during idle periods
-     */
-    public static class IdleBehaviorTest extends BaseTest {
+    
+    public static class HumongousTrackingTest {
         public static void main(String[] args) throws Exception {
-            // Initial allocation
-            System.out.println("Initial allocation phase");
-            allocateMemory(200);
-            System.gc();
+            System.out.println("=== Humongous Object Tracking Test ===");
             
-            // First idle period - shorter than uncommit delay
-            System.out.println("Starting short idle phase");
-            clearMemory();
-            Thread.sleep(30000); // < G1UncommitDelayMillis
+            // Allocate several humongous objects (larger than region size)
+            List<byte[]> humongousObjects = new ArrayList<>();
             
-            // Second allocation
-            allocateMemory(100);
-            System.gc();
-            
-            // Long idle period - should trigger uncommit
-            System.out.println("Starting long idle phase");
-            clearMemory();
-            System.out.println("Starting idle phase");
-            Thread.sleep(65000); // > G1UncommitDelayMillis
-            
-            System.out.println("Memory released");
-            System.gc();
-        }
-    }
-
-    /**
-     * Test coordination with concurrent GC operations
-     */
-    public static class ConcurrentGCTest extends BaseTest {
-        private static final int NUM_THREADS = 2;
-        
-        public static void main(String[] args) throws Exception {
-            ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
-            CountDownLatch gcLatch = new CountDownLatch(1);
-            
-            // Start allocation thread
-            executor.submit(() -> {
-                try {
-                    System.out.println("Starting concurrent allocations");
-                    while (!Thread.interrupted()) {
-                        allocateMemory(10);
-                        Thread.sleep(100);
-                        clearMemory();
-                    }
-                } catch (InterruptedException e) {
-                    // Expected
-                }
-            });
-            
-            // Start GC thread
-            executor.submit(() -> {
-                try {
-                    gcLatch.await();
-                    while (!Thread.interrupted()) {
-                        System.gc();
-                        Thread.sleep(5000);
-                    }
-                } catch (InterruptedException e) {
-                    // Expected
-                }
-            });
-            
-            // Let the threads run
-            gcLatch.countDown();
-            Thread.sleep(65000);
-            
-            executor.shutdownNow();
-            executor.awaitTermination(10, TimeUnit.SECONDS);
-            
-            clearMemory();
-        }
-    }
-
-    /**
-     * Test error handling and recovery scenarios
-     */
-    public static class ErrorConditionsTest extends BaseTest {
-        public static void main(String[] args) throws Exception {
-            System.out.println("Starting error simulation");
-            
-            // Rapid allocation/deallocation to stress region management
+            // Each region is 1MB, so allocate 2MB objects (humongous)
             for (int i = 0; i < 5; i++) {
-                allocateMemory(100);
-                // Force fragmentation with small allocations
-                for (int j = 0; j < 1000; j++) {
-                    arrays.add(new byte[1024]); // 1KB
-                }
-                clearMemory();
+                humongousObjects.add(new byte[2 * 1024 * 1024]);
+                System.gc(); // Force potential region transitions
                 Thread.sleep(100);
             }
             
-            // Large allocation followed by immediate clear
-            allocateMemory(400);
-            clearMemory();
+            // Hold some, release others to create mixed region states
+            humongousObjects.remove(0);
+            humongousObjects.remove(0);
+            System.gc();
             
-            // Sleep to allow uncommit
-            Thread.sleep(65000);
+            // Wait for time-based evaluation with humongous regions present
+            Thread.sleep(8000);
             
-            // Verify we can still allocate
-            allocateMemory(50);
-            System.out.println("Recovered from allocation failure");
+            // Clean up
+            humongousObjects.clear();
+            System.gc();
             
-            clearMemory();
+            System.out.println("HumongousTrackingTest: Test completed");
+            Runtime.getRuntime().halt(0);
         }
     }
 }

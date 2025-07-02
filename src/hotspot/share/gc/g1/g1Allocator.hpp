@@ -73,12 +73,6 @@ private:
                                  OldGCAllocRegion* old,
                                  G1HeapRegion** retained);
 
-  void record_region_activity(G1HeapRegion* hr) {
-    if (hr != nullptr) {
-      hr->record_activity();
-    }
-  }
-
   // Accessors to the allocation regions.
   inline MutatorAllocRegion* mutator_alloc_region(uint node_index);
   inline SurvivorGCAllocRegion* survivor_gc_alloc_region(uint node_index);

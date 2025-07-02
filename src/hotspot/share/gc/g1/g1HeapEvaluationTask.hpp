@@ -25,18 +25,20 @@
 #ifndef SHARE_GC_G1_G1HEAPEVALUATIONTASK_HPP
 #define SHARE_GC_G1_G1HEAPEVALUATIONTASK_HPP
 
-#include "gc/g1/g1ServiceThread.hpp"
+#include "runtime/task.hpp"  // Changed from g1ServiceThread.hpp
+#include "gc/g1/g1_globals.hpp"
 
 class G1CollectedHeap;
 class G1HeapSizingPolicy;
 
-class G1HeapEvaluationTask : public G1ServiceTask {
+// Time-based heap evaluation task that runs during idle periods
+class G1HeapEvaluationTask : public PeriodicTask {  // Changed from G1ServiceTask
   G1CollectedHeap* _g1h;
   G1HeapSizingPolicy* _heap_sizing_policy;
 
 public:
   G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy);
-  virtual void execute() override;
+  virtual void task() override;  // Changed from execute() to task()
 };
 
 #endif // SHARE_GC_G1_G1HEAPEVALUATIONTASK_HPP

@@ -74,12 +74,8 @@ public:
   void clear_ratio_check_data();
 
   // Time-based sizing methods
-  static void initialize() {
-    _uncommit_delay_ms = (jlong)G1UncommitDelayMillis;
-  }
-  static jlong uncommit_delay() {
-    return _uncommit_delay_ms;
-  }
+  static void initialize();
+  static jlong uncommit_delay() { return _uncommit_delay_ms; }
   size_t evaluate_heap_resize(bool& expand);
 
   static G1HeapSizingPolicy* create(const G1CollectedHeap* g1h, const G1Analytics* analytics);

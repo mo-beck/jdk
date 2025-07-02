@@ -239,20 +239,19 @@ G1HeapRegion::G1HeapRegion(uint hrm_index,
   _type(),
   _humongous_start_region(nullptr),
   _index_in_opt_cset(InvalidCSetIndex),
-  _next(nullptr),
-  _prev(nullptr),
+  _next(nullptr), _prev(nullptr),
 #ifdef ASSERT
   _containing_set(nullptr),
 #endif
   _parsable_bottom(nullptr),
-  _garbage_bytes(0), 
+  _garbage_bytes(0),
   _incoming_refs(0),
   _young_index_in_cset(-1),
   _surv_rate_group(nullptr),
   _age_index(G1SurvRateGroup::InvalidAgeIndex),
   _node_index(G1NUMA::UnknownNodeIndex),
-  _pinned_object_count(0),
-  _last_access_timestamp(os::javaTimeMillis()) // Initialize timestamp with milliseconds to match uncommit check
+  _last_access_timestamp(os::javaTimeMillis()), // Initialize timestamp with milliseconds to match uncommit check
+  _pinned_object_count(0)
 {
   assert(Universe::on_page_boundary(mr.start()) && Universe::on_page_boundary(mr.end()),
          "invalid space boundaries");

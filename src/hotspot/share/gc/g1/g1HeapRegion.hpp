@@ -253,11 +253,11 @@ private:
   // NUMA node.
   uint _node_index;
 
+  // Time-based heap sizing: tracks last allocation/access time
+  jlong _last_access_timestamp;
+
   // Number of objects in this region that are currently pinned.
   volatile size_t _pinned_object_count;
-
-  // For time-based heap sizing
-  jlong _last_access_timestamp;
 
   void report_region_type_change(G1HeapRegionTraceType::Type to);
 
@@ -404,24 +404,6 @@ public:
   size_t pinned_count() const { return Atomic::load(&_pinned_object_count); }
   bool has_pinned_objects() const { return pinned_count() > 0; }
   
-  // Returns true if the region has been inactive for longer than the uncommit delay
-  bool should_uncommit(uint64_t delay) const {
-    if (!is_empty()) {
-      return false;
-    }
-    jlong current_time = os::javaTimeMillis();
-    jlong elapsed = current_time - _last_access_timestamp;
-    return elapsed > (jlong)delay;
-  }
-
-  void record_activity() {
-    _last_access_timestamp = os::javaTimeMillis();  // Use milliseconds to match uncommit check
-  }
-
-  jlong last_access_time() const {
-    return _last_access_timestamp;
-  }
-
   void set_free();
 
   void set_eden();
@@ -575,6 +557,25 @@ public:
   uint node_index() const { return _node_index; }
   void set_node_index(uint node_index) { _node_index = node_index; }
 
+  // Time-based heap sizing methods
+  void record_activity() {
+    _last_access_timestamp = os::javaTimeMillis();  // Use milliseconds to match uncommit check
+  }
+
+  jlong last_access_time() const {
+    return _last_access_timestamp;
+  }
+
+  // Returns true if the region has been inactive for longer than the uncommit delay
+  bool should_uncommit(uint64_t delay) const {
+    if (!is_empty()) {
+      return false;
+    }
+    jlong current_time = os::javaTimeMillis();
+    jlong elapsed = current_time - _last_access_timestamp;
+    return elapsed > (jlong)delay;
+  }
+
   // Verify that the entries on the code root list for this
   // region are live and include at least one pointer into this region.
   // Returns whether there has been a failure.
@@ -585,9 +586,6 @@ public:
   void print_on(outputStream* st) const;
 
   bool verify(VerifyOption vo) const;
-
-  // Get region index for heap region manager
-  uint region_idx() const { return hrm_index(); }
 };
 
 // G1HeapRegionClosure is used for iterating over regions.
