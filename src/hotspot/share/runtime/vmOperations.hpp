@@ -30,8 +30,6 @@
 #include "runtime/threadSMR.hpp"
 #include "runtime/vmOperation.hpp"
 
-class G1CollectedHeap;
-
 class ObjectMonitorsView;
 
 // A hodge podge of commonly used VM Operations
