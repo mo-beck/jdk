@@ -26,30 +26,32 @@
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"
+#include "gc/g1/g1ServiceThread.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
 #include "runtime/globals.hpp"
 #include "utilities/debug.hpp"
-#include "utilities/globalDefinitions.hpp"
 
 G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy) :
-  PeriodicTask(G1TimeBasedEvaluationIntervalMillis),  // Use PeriodicTask with interval
+  G1ServiceTask("G1 Heap Evaluation Task"),
   _g1h(g1h),
   _heap_sizing_policy(heap_sizing_policy) {
 }
 
-void G1HeapEvaluationTask::task() {
-  // This runs on WatcherThread during idle periods - perfect for uncommit evaluation!
-  log_debug(gc, sizing)("Starting heap evaluation");
+void G1HeapEvaluationTask::execute() {
+  log_debug(gc, sizing)("Starting uncommit evaluation");
 
   if (!G1UseTimeBasedHeapSizing) {
+    // Feature is disabled, don't reschedule
     return;
   }
 
   // Ensure we're not running during GC activity
   if (_g1h->is_stw_gc_active()) {
     log_trace(gc, sizing)("GC active, skipping uncommit evaluation");
+    // Still need to reschedule to keep the periodic task running
+    schedule(G1TimeBasedEvaluationIntervalMillis);
     return;
   }
 
@@ -57,16 +59,16 @@ void G1HeapEvaluationTask::task() {
 
   bool should_expand = false;
   size_t resize_amount = _heap_sizing_policy->evaluate_heap_resize(should_expand);
-
+  
   if (resize_amount > 0) {
-    // Uncommit-based sizing only handles shrinking, never expansion
+    // Uncommit evaluation only handles uncommit/shrinking, never expansion
     if (should_expand) {
       log_warning(gc, sizing)("Uncommit evaluation: unexpected expansion request ignored (resize_amount=%zuB)", resize_amount);
-      // This should not happen since uncommit-based policy only handles shrinking
+      // This should not happen since uncommit-based policy only handles uncommit
       assert(false, "Uncommit-based heap sizing should never request expansion");
     } else {
       log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB", resize_amount / M);
-      log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB", resize_amount);
+      log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB", resize_amount); 
       _g1h->request_heap_shrink(resize_amount);
     }
   } else {
@@ -77,5 +79,6 @@ void G1HeapEvaluationTask::task() {
     }
   }
 
-  // No need to schedule - PeriodicTask automatically reschedules itself!
+  // Schedule the next evaluation to maintain periodic behavior
+  schedule(G1TimeBasedEvaluationIntervalMillis);
 }

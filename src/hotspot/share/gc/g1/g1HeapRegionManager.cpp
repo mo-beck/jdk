@@ -201,7 +201,7 @@ void G1HeapRegionManager::uncommit_regions(uint start, uint num_regions) {
       G1HeapRegionPrinter::uncommit(hr);
     }
   }
-
+  
   // Uncommit heap memory
   _heap_mapper->uncommit_regions(start, num_regions);
 

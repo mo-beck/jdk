@@ -77,7 +77,7 @@ public class TestG1RegionUncommit {
 
         // Verify the uncommit evaluation logic is working
         output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
-        output.shouldContain("Starting heap evaluation");
+        output.shouldContain("Starting uncommit evaluation");
         output.shouldContain("Region state transition:");
         output.shouldContain("transitioning from active to inactive");
         output.shouldContain("Uncommit candidates found:");

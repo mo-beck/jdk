@@ -70,8 +70,9 @@ public class TestTimeBasedRegionTracking {
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
         // Verify region state changes
+        output.shouldContain("Starting uncommit evaluation");
+        output.shouldContain("Full region scan: counting uncommit candidates");
         output.shouldContain("Region state transition:");
-        output.shouldContain("Uncommit candidates found:");
 
         output.shouldHaveExitValue(0);
     }

@@ -39,9 +39,6 @@
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/ticks.hpp"
 
-// Initialize static member
-Tickspan G1HeapSizingPolicy::_uncommit_delay;
-
 G1HeapSizingPolicy* G1HeapSizingPolicy::create(const G1CollectedHeap* g1h, const G1Analytics* analytics) {
   return new G1HeapSizingPolicy(g1h, analytics);
 }
@@ -54,8 +51,6 @@ G1HeapSizingPolicy::G1HeapSizingPolicy(const G1CollectedHeap* g1h, const G1Analy
   _gc_cpu_usage_deviation_counter((G1CPUUsageExpandThreshold / 2) + 1),
   _recent_cpu_usage_deltas(long_term_count_limit()),
   _long_term_count(0) {
-  // Initialize static uncommit delay from flag value
-  _uncommit_delay = Tickspan::from_milliseconds(G1UncommitDelayMillis);
 }
 
 void G1HeapSizingPolicy::reset_cpu_usage_tracking_data() {
@@ -450,42 +445,69 @@ size_t G1HeapSizingPolicy::full_collection_resize_amount(bool& expand, size_t al
   return 0;
 }
 
-void G1HeapSizingPolicy::get_uncommit_candidates(GrowableArray<G1HeapRegion*>* candidates) {
+uint G1HeapSizingPolicy::count_uncommit_candidates() {
   uint inactive_regions = 0;
 
-  // Check each heap region for inactivity
+  // Count regions that would be eligible for uncommit
+  class CountUncommitCandidatesClosure : public G1HeapRegionClosure {
+    uint* _inactive_regions;
+    const G1HeapSizingPolicy* _policy;
+  public:
+    CountUncommitCandidatesClosure(uint* inactive_regions, const G1HeapSizingPolicy* policy) :
+      _inactive_regions(inactive_regions),
+      _policy(policy) {}
+
+    virtual bool do_heap_region(G1HeapRegion* r) {
+      if (r->is_empty() && _policy->should_uncommit_region(r)) {
+        (*_inactive_regions)++;
+      }
+      return false;
+    }
+  } cl(&inactive_regions, this);
+
+  log_debug(gc, sizing)("Full region scan: counting uncommit candidates");
+  _g1h->heap_region_iterate(&cl);
+  return inactive_regions;
+}
+
+void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRegion*>* candidates, uint max_candidates) {
+  uint inactive_regions = 0;
+
+  // Check each heap region for inactivity, limiting to max_candidates for efficiency
   class UncommitCandidatesClosure : public G1HeapRegionClosure {
     GrowableArray<G1HeapRegion*>* _candidates;
     uint* _inactive_regions;
+    uint _max_candidates;
     const G1HeapSizingPolicy* _policy;
   public:
     UncommitCandidatesClosure(GrowableArray<G1HeapRegion*>* candidates,
                              uint* inactive_regions,
+                             uint max_candidates,
                              const G1HeapSizingPolicy* policy) :
       _candidates(candidates),
       _inactive_regions(inactive_regions),
+      _max_candidates(max_candidates),
       _policy(policy) {}
 
     virtual bool do_heap_region(G1HeapRegion* r) {
       if (r->is_empty() && _policy->should_uncommit_region(r)) {
         _candidates->append(r);
         (*_inactive_regions)++;
+        // Stop early if we have enough candidates
+        if ((uint)_candidates->length() >= _max_candidates) {
+          return true; // Stop iteration
+        }
       }
       return false;
     }
-  } cl(candidates, &inactive_regions, this);
+  } cl(candidates, &inactive_regions, max_candidates, this);
 
   _g1h->heap_region_iterate(&cl);
 
   if (inactive_regions > 0) {
-    log_debug(gc, sizing)("Uncommit candidates found: %u inactive regions out of %u total regions",
-                  inactive_regions, _g1h->max_num_regions());
-    log_debug(gc, sizing)("Region state transition: %u regions found eligible for uncommit after scan",
-                  inactive_regions);
+    log_debug(gc, sizing)("Time-based uncommit evaluation: found %u inactive regions (requested %u)",
+                         inactive_regions, max_candidates);
   }
-  log_debug(gc, sizing)("Full region scan: found %u inactive regions out of %u total regions",
-                       inactive_regions,
-                       _g1h->max_num_regions());
 }
 
 bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
@@ -497,11 +519,12 @@ bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
   Tickspan elapsed = current_time - last_access;
 
   log_trace(gc, sizing)("Region %u uncommit check: elapsed=" JLONG_FORMAT "ms threshold=" JLONG_FORMAT "ms last_access=" JLONG_FORMAT " now=" JLONG_FORMAT " empty=%s",
-                     hr->hrm_index(), (jlong)elapsed.milliseconds(), (jlong)_uncommit_delay.milliseconds(), last_access.value(), current_time.value(),
+                     hr->hrm_index(), (jlong)elapsed.milliseconds(), (jlong)G1UncommitDelayMillis, last_access.value(), current_time.value(),
                      hr->is_empty() ? "true" : "false");
 
-  bool should_uncommit = elapsed > _uncommit_delay;
+  bool should_uncommit = elapsed.milliseconds() > G1UncommitDelayMillis;
   if (should_uncommit) {
+    log_debug(gc, sizing)("Region state transition: transitioning from active to inactive");
     log_debug(gc, sizing)("Region state transition: Region %u transitioning from active to inactive after " JLONG_FORMAT "ms idle",
                   hr->hrm_index(), (jlong)elapsed.milliseconds());
   }
@@ -526,11 +549,8 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
 
   ResourceMark rm; // Ensure GrowableArray resources are properly released
 
-  // Find regions eligible for uncommit
-  GrowableArray<G1HeapRegion*> candidates;
-  get_uncommit_candidates(&candidates);
-
-  uint inactive_count = candidates.length();
+  // Count regions eligible for uncommit (don't store them - VM operation will re-evaluate)
+  uint inactive_count = count_uncommit_candidates();
   uint total_regions = _g1h->max_num_regions();
 
   // Need minimum number of inactive regions to proceed
@@ -576,6 +596,7 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
       }
 
       if (shrink_bytes > 0) {
+        log_debug(gc, sizing)("Uncommit candidates found: %u inactive regions", inactive_count);
         log_info(gc, sizing)("Uncommit evaluation: found %u inactive regions, uncommitting %zu regions (%zuMB)",
                             inactive_count, regions_to_uncommit, shrink_bytes / M);
         log_debug(gc, sizing)("Uncommit evaluation: Found %u inactive regions out of %u total regions, "

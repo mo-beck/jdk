@@ -72,8 +72,6 @@ class G1CollectedHeap;
 // For full collections, we base resize decisions only on Min/MaxHeapFreeRatio.
 //
 class G1HeapSizingPolicy: public CHeapObj<mtGC> {
-  static Tickspan _uncommit_delay;  // Delay before uncommitting inactive regions
-
   const G1CollectedHeap* _g1h;
   const G1Analytics* _analytics;
 
@@ -102,10 +100,6 @@ class G1HeapSizingPolicy: public CHeapObj<mtGC> {
 
   G1HeapSizingPolicy(const G1CollectedHeap* g1h, const G1Analytics* analytics);
 
-  // Methods for time-based sizing
-  void get_uncommit_candidates(GrowableArray<G1HeapRegion*>* candidates);
-  bool should_uncommit_region(G1HeapRegion* hr) const;
-
 public:
   static constexpr uint long_term_count_limit() {
     return G1Analytics::max_num_of_recorded_pause_times();
@@ -120,8 +114,12 @@ public:
   size_t full_collection_resize_amount(bool& expand, size_t allocation_word_size);
 
   // Time-based sizing methods
-  static Tickspan uncommit_delay() { return _uncommit_delay; }
   size_t evaluate_heap_resize(bool& expand);
+
+  // Methods for time-based sizing analysis
+  uint count_uncommit_candidates();
+  void find_uncommit_candidates_by_time(GrowableArray<G1HeapRegion*>* candidates, uint max_candidates);
+  bool should_uncommit_region(G1HeapRegion* hr) const;
 
   static G1HeapSizingPolicy* create(const G1CollectedHeap* g1h, const G1Analytics* analytics);
 };
