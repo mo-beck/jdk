@@ -121,6 +121,9 @@ public:
   void find_uncommit_candidates_by_time(GrowableArray<G1HeapRegion*>* candidates, uint max_candidates);
   bool should_uncommit_region(G1HeapRegion* hr) const;
 
+  // Mark specific time-based candidates as inactive for uncommitting
+  uint mark_time_based_candidates_inactive(uint max_regions_to_mark);
+
   static G1HeapSizingPolicy* create(const G1CollectedHeap* g1h, const G1Analytics* analytics);
 };
 

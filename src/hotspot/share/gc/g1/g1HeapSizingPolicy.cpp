@@ -28,6 +28,7 @@
 #include "gc/g1/g1CollectedHeap.hpp"
 #include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"
+#include "gc/g1/g1HeapRegion.hpp"
 #include "gc/g1/g1HeapRegionManager.inline.hpp"
 #include "gc/shared/gc_globals.hpp"
 #include "logging/log.hpp"
@@ -510,6 +511,39 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
   }
 }
 
+uint G1HeapSizingPolicy::mark_time_based_candidates_inactive(uint max_regions_to_mark) {
+  ResourceMark rm;
+  GrowableArray<G1HeapRegion*> candidates(max_regions_to_mark);
+  
+  // Find time-based candidates
+  find_uncommit_candidates_by_time(&candidates, max_regions_to_mark);
+  
+  if (candidates.length() == 0) {
+    log_debug(gc, sizing)("Time-based uncommit: no candidates found");
+    return 0;
+  }
+  
+  uint marked_count = 0;
+  // Mark each candidate region as inactive
+  for (int i = 0; i < candidates.length(); i++) {
+    G1HeapRegion* hr = candidates.at(i);
+    uint region_index = hr->hrm_index();
+    
+    log_debug(gc, sizing)("Time-based uncommit: marking region %u as inactive (last_access=" UINT64_FORMAT "ms ago)",
+                         region_index, (Ticks::now() - hr->last_access_time()).milliseconds());
+    
+    // Mark single region as inactive - use the public deactivate_region_at method
+    const_cast<G1CollectedHeap*>(_g1h)->deactivate_region_at(region_index);
+    marked_count++;
+  }
+  
+  if (marked_count > 0) {
+    log_info(gc, sizing)("Time-based uncommit: marked %u regions as inactive for uncommit", marked_count);
+  }
+  
+  return marked_count;
+}
+
 bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
   // Note: Caller already guarantees hr->is_empty() is true
   // Empty regions should always be free and not in collection set in normal operation
@@ -604,9 +638,20 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
                              inactive_count, total_regions, shrink_bytes, max_shrink_bytes);
         log_debug(gc, sizing)("Region state transition: %zu regions selected for uncommit",
                      regions_to_uncommit);
+        
+        // Actually mark the time-based candidates as inactive instead of relying on traditional shrinking
+        uint actually_marked = mark_time_based_candidates_inactive((uint)regions_to_uncommit);
+        size_t actual_shrink_bytes = actually_marked * G1HeapRegion::GrainBytes;
+        
+        if (actually_marked > 0) {
+          log_info(gc, sizing)("Time-based uncommit: successfully marked %u regions (%zuMB) as inactive",
+                              actually_marked, actual_shrink_bytes / M);
+        }
+        
+        return actual_shrink_bytes;
       }
 
-      return shrink_bytes;
+      return 0;
     }
   }
 

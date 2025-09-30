@@ -987,6 +987,9 @@ public:
   // The number of inactive regions.
   uint num_inactive_regions() const { return _hrm.num_inactive_regions(); }
 
+  // Deactivate a specific region by index.
+  void deactivate_region_at(uint region_index) { _hrm.shrink_at(region_index, 1); }
+
   // The current number of regions in the heap.
   uint num_committed_regions() const { return _hrm.num_committed_regions(); }
 
