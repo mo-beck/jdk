@@ -122,7 +122,7 @@ public:
   bool should_uncommit_region(G1HeapRegion* hr) const;
 
   // Mark specific time-based candidates as inactive for uncommitting
-  uint mark_time_based_candidates_inactive(uint max_regions_to_mark);
+  size_t calculate_time_based_shrink_amount(uint max_regions_to_shrink);
 
   static G1HeapSizingPolicy* create(const G1CollectedHeap* g1h, const G1Analytics* analytics);
 };

@@ -67,7 +67,7 @@ void G1HeapEvaluationTask::execute() {
       // This should not happen since uncommit-based policy only handles uncommit
       assert(false, "Uncommit-based heap sizing should never request expansion");
     } else {
-      log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB", resize_amount / M);
+      log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB using time-based selection", resize_amount / M);
       log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB", resize_amount); 
       _g1h->request_heap_shrink(resize_amount);
     }

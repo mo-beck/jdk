@@ -584,6 +584,7 @@ public:
 
   // Request an immediate heap contraction of (at most) the given number of bytes.
   // Returns true if any pages were actually uncommitted.
+  // Uses time-based region selection to shrink oldest eligible regions.
   bool request_heap_shrink(size_t shrink_bytes);
 
   // Returns the PLAB statistics for a given destination.
@@ -734,6 +735,10 @@ private:
   // (Rounds down to a G1HeapRegion boundary.)
   void shrink(size_t shrink_bytes);
   void shrink_helper(size_t expand_bytes);
+  
+  // Time-based shrinking that selects oldest regions instead of from end
+  void shrink_with_time_based_selection(size_t shrink_bytes);
+  void shrink_helper_with_time_based_selection(size_t shrink_bytes);
 
   // Schedule the VM operation that will do an evacuation pause to
   // satisfy an allocation request of word_size. *succeeded will

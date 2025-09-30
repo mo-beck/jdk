@@ -36,6 +36,7 @@
 #include "runtime/globals.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/os.hpp"
+#include "runtime/safepoint.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/ticks.hpp"
@@ -511,37 +512,46 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
   }
 }
 
-uint G1HeapSizingPolicy::mark_time_based_candidates_inactive(uint max_regions_to_mark) {
+size_t G1HeapSizingPolicy::calculate_time_based_shrink_amount(uint max_regions_to_shrink) {
   ResourceMark rm;
-  GrowableArray<G1HeapRegion*> candidates(max_regions_to_mark);
   
-  // Find time-based candidates
-  find_uncommit_candidates_by_time(&candidates, max_regions_to_mark);
+  GrowableArray<G1HeapRegion*> candidates(max_regions_to_shrink);
+  
+  // Find time-based candidates  
+  find_uncommit_candidates_by_time(&candidates, max_regions_to_shrink);
   
   if (candidates.length() == 0) {
-    log_debug(gc, sizing)("Time-based uncommit: no candidates found");
+    log_debug(gc, sizing)("Time-based shrink: no candidates found");
     return 0;
   }
   
-  uint marked_count = 0;
-  // Mark each candidate region as inactive
+  uint valid_candidates = 0;
+  // Count valid candidates (must be available, empty, and free)
   for (int i = 0; i < candidates.length(); i++) {
     G1HeapRegion* hr = candidates.at(i);
     uint region_index = hr->hrm_index();
     
-    log_debug(gc, sizing)("Time-based uncommit: marking region %u as inactive (last_access=" UINT64_FORMAT "ms ago)",
-                         region_index, (Ticks::now() - hr->last_access_time()).milliseconds());
-    
-    // Mark single region as inactive - use the public deactivate_region_at method
-    const_cast<G1CollectedHeap*>(_g1h)->deactivate_region_at(region_index);
-    marked_count++;
+    // Only count if region is ready for shrinking
+    if (hr->is_available() && hr->is_empty() && hr->is_free()) {
+      log_debug(gc, sizing)("Time-based shrink: identified region %u as candidate (last_access=" UINT64_FORMAT "ms ago)",
+                           region_index, (Ticks::now() - hr->last_access_time()).milliseconds());
+      valid_candidates++;
+    } else {
+      log_debug(gc, sizing)("Time-based shrink: skipping region %u - not ready for shrinking "
+                           "(available=%s, empty=%s, free=%s)",
+                           region_index, hr->is_available() ? "true" : "false",
+                           hr->is_empty() ? "true" : "false", hr->is_free() ? "true" : "false");
+    }
   }
   
-  if (marked_count > 0) {
-    log_info(gc, sizing)("Time-based uncommit: marked %u regions as inactive for uncommit", marked_count);
+  size_t shrink_bytes = (size_t)valid_candidates * G1HeapRegion::GrainBytes;
+  
+  if (valid_candidates > 0) {
+    log_info(gc, sizing)("Time-based shrink: requesting %zuMB based on %u time-based candidates", 
+                         shrink_bytes / M, valid_candidates);
   }
   
-  return marked_count;
+  return shrink_bytes;
 }
 
 bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
@@ -639,16 +649,10 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
         log_debug(gc, sizing)("Region state transition: %zu regions selected for uncommit",
                      regions_to_uncommit);
         
-        // Actually mark the time-based candidates as inactive instead of relying on traditional shrinking
-        uint actually_marked = mark_time_based_candidates_inactive((uint)regions_to_uncommit);
-        size_t actual_shrink_bytes = actually_marked * G1HeapRegion::GrainBytes;
+        // Calculate shrink amount based on time-based candidates
+        size_t time_based_shrink = calculate_time_based_shrink_amount((uint)regions_to_uncommit);
         
-        if (actually_marked > 0) {
-          log_info(gc, sizing)("Time-based uncommit: successfully marked %u regions (%zuMB) as inactive",
-                              actually_marked, actual_shrink_bytes / M);
-        }
-        
-        return actual_shrink_bytes;
+        return time_based_shrink;
       }
 
       return 0;

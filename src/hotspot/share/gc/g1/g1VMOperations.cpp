@@ -172,5 +172,5 @@ void VM_G1PauseCleanup::work() {
 }
 
 void VM_G1ShrinkHeap::doit() {
-  _g1h->shrink(_bytes);
+  _g1h->shrink_with_time_based_selection(_bytes);
 }

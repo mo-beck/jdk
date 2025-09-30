@@ -1060,6 +1060,71 @@ bool G1CollectedHeap::expand_single_region(uint node_index) {
   return true;
 }
 
+void G1CollectedHeap::shrink_with_time_based_selection(size_t shrink_bytes) {
+  if (capacity() == min_capacity()) {
+    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (heap already at minimum)");
+    return;
+  }
+
+  size_t aligned_shrink_bytes = os::align_down_vm_page_size(shrink_bytes);
+  aligned_shrink_bytes = align_down(aligned_shrink_bytes, G1HeapRegion::GrainBytes);
+
+  aligned_shrink_bytes = capacity() - MAX2(capacity() - aligned_shrink_bytes, min_capacity());
+  assert(is_aligned(aligned_shrink_bytes, G1HeapRegion::GrainBytes), "Bytes to shrink %zuB not aligned", aligned_shrink_bytes);
+
+  log_debug(gc, ergo, heap)("Time-based shrink: Requested shrink amount: %zuB aligned shrink amount: %zuB",
+                            shrink_bytes, aligned_shrink_bytes);
+
+  if (aligned_shrink_bytes == 0) {
+    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (shrink request too small)");
+    return;
+  }
+
+  _verifier->verify_region_sets_optional();
+
+  // We should only reach here from the service thread during idle time
+  // but ensure any GC alloc regions are abandoned
+  _allocator->abandon_gc_alloc_regions();
+
+  // For time-based shrink, we use time-aware selection instead of removing from end
+  _hrm.remove_all_free_regions();
+  shrink_helper_with_time_based_selection(aligned_shrink_bytes);
+  rebuild_region_sets(true /* free_list_only */);
+
+  _hrm.verify_optional();
+  _verifier->verify_region_sets_optional();
+}
+
+void G1CollectedHeap::shrink_helper_with_time_based_selection(size_t shrink_bytes) {
+  assert(shrink_bytes > 0, "must be");
+  assert(is_aligned(shrink_bytes, G1HeapRegion::GrainBytes),
+         "Shrink request for %zuB not aligned to heap region size %zuB",
+         shrink_bytes, G1HeapRegion::GrainBytes);
+
+  uint num_regions_to_remove = (uint)(shrink_bytes / G1HeapRegion::GrainBytes);
+  uint num_regions_removed = 0;
+  
+  // Use time-based selection to shrink oldest eligible regions
+  log_debug(gc, ergo, heap)("Time-based shrink: removing %u oldest regions (%zuB)",
+                            num_regions_to_remove, shrink_bytes);
+  num_regions_removed = _hrm.shrink_by(num_regions_to_remove, true /* use_time_based_selection */);
+
+  size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
+  log_debug(gc, ergo, heap)("Time-based shrink: Requested shrinking amount: %zuB actual shrinking amount: %zuB (%u regions)",
+                           shrink_bytes, shrunk_bytes, num_regions_removed);
+                           
+  if (num_regions_removed > 0) {
+    log_info(gc, heap)("Time-based shrink: uncommitted %u oldest regions (%zuMB), heap size now %zuMB",
+                       num_regions_removed, shrunk_bytes / M, capacity() / M);
+    log_debug(gc, heap)("Time-based shrink details: requested=%zuB actual=%zuB "
+                        "regions_removed=%u heap_capacity=%zuB",
+                        shrink_bytes, shrunk_bytes, num_regions_removed, capacity());
+    policy()->record_new_heap_size(num_committed_regions());
+  } else {
+    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (no eligible regions found)");
+  }
+}
+
 void G1CollectedHeap::shrink_helper(size_t shrink_bytes) {
   assert(shrink_bytes > 0, "must be");
   assert(is_aligned(shrink_bytes, G1HeapRegion::GrainBytes),
@@ -1137,13 +1202,13 @@ bool G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
   // Fast path: if we are already at a safepoint (e.g. called from the
   // GC service thread) just do the work directly.
   if (SafepointSynchronize::is_at_safepoint()) {
-    shrink(shrink_bytes);
+    shrink_with_time_based_selection(shrink_bytes);
     return true;                     // We did something.
   }
 
   // Always schedule a VM operation for safety - we cannot safely call shrink_helper directly
   // The VM operation will re-evaluate which regions to uncommit at the time of execution
-  VM_G1ShrinkHeap op(this, shrink_bytes);
+  VM_G1ShrinkHeap op(this, shrink_bytes, true /* use_time_based_selection */);
   VMThread::execute(&op);
   return true;                       // Pages were requested to be released.
 }
