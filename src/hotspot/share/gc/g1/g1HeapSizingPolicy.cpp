@@ -532,15 +532,14 @@ size_t G1HeapSizingPolicy::calculate_time_based_shrink_amount(uint max_regions_t
     uint region_index = hr->hrm_index();
     
     // Only count if region is ready for shrinking
-    if (hr->is_available() && hr->is_empty() && hr->is_free()) {
+    if (hr->is_empty() && hr->is_free()) {
       log_debug(gc, sizing)("Time-based shrink: identified region %u as candidate (last_access=" UINT64_FORMAT "ms ago)",
                            region_index, (Ticks::now() - hr->last_access_time()).milliseconds());
       valid_candidates++;
     } else {
       log_debug(gc, sizing)("Time-based shrink: skipping region %u - not ready for shrinking "
-                           "(available=%s, empty=%s, free=%s)",
-                           region_index, hr->is_available() ? "true" : "false",
-                           hr->is_empty() ? "true" : "false", hr->is_free() ? "true" : "false");
+                           "(empty=%s, free=%s)",
+                           region_index, hr->is_empty() ? "true" : "false", hr->is_free() ? "true" : "false");
     }
   }
   

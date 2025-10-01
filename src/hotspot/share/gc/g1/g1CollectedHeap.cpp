@@ -1208,7 +1208,7 @@ bool G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
 
   // Always schedule a VM operation for safety - we cannot safely call shrink_helper directly
   // The VM operation will re-evaluate which regions to uncommit at the time of execution
-  VM_G1ShrinkHeap op(this, shrink_bytes, true /* use_time_based_selection */);
+  VM_G1ShrinkHeap op(this, shrink_bytes);
   VMThread::execute(&op);
   return true;                       // Pages were requested to be released.
 }
