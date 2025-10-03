@@ -805,6 +805,9 @@ void G1CollectedHeap::prepare_for_mutator_after_full_collection(size_t allocatio
   start_new_collection_set();
   _allocator->init_mutator_alloc_regions();
 
+  // Note: Region timestamps are updated automatically when regions transition to free state
+  // via set_free() calls, so no blanket reset is needed here
+
   // Post collection state updates.
   MetaspaceGC::compute_new_size();
 }
@@ -1199,14 +1202,7 @@ bool G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
     return false;
   }
 
-  // Fast path: if we are already at a safepoint (e.g. called from the
-  // GC service thread) just do the work directly.
-  if (SafepointSynchronize::is_at_safepoint()) {
-    shrink_with_time_based_selection(shrink_bytes);
-    return true;                     // We did something.
-  }
-
-  // Always schedule a VM operation for safety - we cannot safely call shrink_helper directly
+  // Always schedule a VM operation for proper synchronization with GC
   // The VM operation will re-evaluate which regions to uncommit at the time of execution
   VM_G1ShrinkHeap op(this, shrink_bytes);
   VMThread::execute(&op);
@@ -2595,6 +2591,9 @@ void G1CollectedHeap::prepare_for_mutator_after_young_collection() {
   // Start a new incremental collection set for the mutator phase.
   start_new_collection_set();
   _allocator->init_mutator_alloc_regions();
+
+  // Note: Region timestamps are updated automatically when regions transition to free state
+  // via set_free() calls, so no blanket reset is needed here
 
   phase_times()->record_prepare_for_mutator_time_ms((Ticks::now() - start).seconds() * 1000.0);
 }

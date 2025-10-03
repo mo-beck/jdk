@@ -27,6 +27,7 @@
 #include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"
 #include "gc/g1/g1ServiceThread.hpp"
+#include "gc/shared/suspendibleThreadSet.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
@@ -42,43 +43,30 @@ G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPol
 void G1HeapEvaluationTask::execute() {
   log_debug(gc, sizing)("Starting uncommit evaluation");
 
-  if (!G1UseTimeBasedHeapSizing) {
-    // Feature is disabled, don't reschedule
-    return;
-  }
-
-  // Ensure we're not running during GC activity
-  if (_g1h->is_stw_gc_active()) {
-    log_trace(gc, sizing)("GC active, skipping uncommit evaluation");
-    // Still need to reschedule to keep the periodic task running
-    schedule(G1TimeBasedEvaluationIntervalMillis);
-    return;
-  }
-
   ResourceMark rm; // Ensure temporary resources are released
 
-  bool should_expand = false;
-  size_t resize_amount = _heap_sizing_policy->evaluate_heap_resize(should_expand);
+  size_t resize_amount;
+  
+  // Use SuspendibleThreadSetJoiner for proper synchronization during heap evaluation
+  // This ensures we don't race with concurrent GC operations while scanning region states
+  {
+    SuspendibleThreadSetJoiner sts;
+    resize_amount = _heap_sizing_policy->evaluate_heap_resize_for_uncommit();
+  }
+  
+  static int evaluation_count = 0;
   
   if (resize_amount > 0) {
-    // Uncommit evaluation only handles uncommit/shrinking, never expansion
-    if (should_expand) {
-      log_warning(gc, sizing)("Uncommit evaluation: unexpected expansion request ignored (resize_amount=%zuB)", resize_amount);
-      // This should not happen since uncommit-based policy only handles uncommit
-      assert(false, "Uncommit-based heap sizing should never request expansion");
-    } else {
-      log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB using time-based selection", resize_amount / M);
-      log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB", resize_amount); 
-      _g1h->request_heap_shrink(resize_amount);
-    }
+    log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB using time-based selection", resize_amount / M);
+    log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB", resize_amount); 
+    // Request VM operation outside of suspendible thread set
+    _g1h->request_heap_shrink(resize_amount);
   } else {
-    // Periodic info log for ongoing evaluation activity (less frequent)
-    static int evaluation_count = 0;
     if (++evaluation_count % 10 == 0) { // Log every 10th evaluation when no action taken
       log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (evaluation #%d)", evaluation_count);
     }
   }
 
-  // Schedule the next evaluation to maintain periodic behavior
+  // Schedule the next evaluation
   schedule(G1TimeBasedEvaluationIntervalMillis);
 }

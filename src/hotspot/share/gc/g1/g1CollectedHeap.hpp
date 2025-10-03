@@ -931,6 +931,8 @@ public:
 
   // The current policy object for the collector.
   G1Policy* policy() const { return _policy; }
+  G1HeapSizingPolicy* heap_sizing_policy() const { return _heap_sizing_policy; }
+  G1HeapRegionManager& heap_region_manager() { return _hrm; }
   // The remembered set.
   G1RemSet* rem_set() const { return _rem_set; }
 

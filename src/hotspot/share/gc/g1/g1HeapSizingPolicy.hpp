@@ -114,7 +114,7 @@ public:
   size_t full_collection_resize_amount(bool& expand, size_t allocation_word_size);
 
   // Time-based sizing methods
-  size_t evaluate_heap_resize(bool& expand);
+  size_t evaluate_heap_resize_for_uncommit();
 
   // Methods for time-based sizing analysis
   uint count_uncommit_candidates();

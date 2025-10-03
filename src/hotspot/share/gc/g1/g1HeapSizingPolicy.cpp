@@ -1,4 +1,3 @@
-
 /*
  * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
@@ -30,6 +29,7 @@
 #include "gc/g1/g1HeapSizingPolicy.hpp"
 #include "gc/g1/g1HeapRegion.hpp"
 #include "gc/g1/g1HeapRegionManager.inline.hpp"
+#include "gc/g1/g1Policy.hpp"
 #include "gc/shared/gc_globals.hpp"
 #include "logging/log.hpp"
 #include "memory/resourceArea.hpp"
@@ -575,16 +575,19 @@ bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
   return should_uncommit;
 }
 
-size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
-  expand = false; // Time-based sizing only handles uncommit, never expansion
-
+size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
   if (!G1UseTimeBasedHeapSizing) {
     return 0;
   }
 
-  // Don't resize during GC
-  if (_g1h->is_stw_gc_active()) {
-    return 0;
+  // Back off during allocation pressure - only evaluate when truly idle
+  if (_analytics != nullptr) {
+    double gc_time_ratio = _analytics->short_term_pause_time_ratio();
+    if (gc_time_ratio > 0.05) { // 5% GC time still indicates pressure
+      log_trace(gc, sizing)("Uncommit evaluation: skipping due to high GC overhead (%1.1f%%)", 
+                           gc_time_ratio * 100.0);
+      return 0;
+    }
   }
 
   // Must hold Heap_lock during heap resizing
@@ -595,6 +598,9 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
   // Count regions eligible for uncommit (don't store them - VM operation will re-evaluate)
   uint inactive_count = count_uncommit_candidates();
   uint total_regions = _g1h->max_num_regions();
+
+  log_debug(gc, sizing)("Uncommit evaluation: found %u inactive candidates (min required: %zu)", 
+                       inactive_count, (size_t)G1MinRegionsToUncommit);
 
   // Need minimum number of inactive regions to proceed
   if (inactive_count >= G1MinRegionsToUncommit) {
@@ -610,21 +616,55 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
                          current_heap, min_heap, region_size, max_shrink_bytes, InitialHeapSize);
 
     if (max_shrink_bytes > 0 && region_size > 0) {
-      size_t max_inactive_regions = max_shrink_bytes / region_size;
-
-      // Calculate maximum uncommit target as the smaller of:
-      // 1. No more than 25% of inactive regions
-      // 2. No more than 10% of total committed regions
-      // 3. No more than max_shrink_bytes worth of regions
+      // Conservative approach: only uncommit if we have significant excess
+      // and preserve space for allocation without triggering GCs
+      
       size_t committed_regions = current_heap / region_size;
-
-      // Upper limits:
-      size_t by_inactive = static_cast<size_t>(inactive_count) / 4;    // 25%
-      size_t by_total = static_cast<size_t>(committed_regions) / 10;   // 10%
-
-      size_t regions_to_uncommit =
-          MIN2(by_total, MIN2(by_inactive, max_inactive_regions));
-
+      
+      // Use G1's existing reserve calculation plus young generation requirements
+      // G1 maintains a reserve (default 10% via G1ReservePercent) for allocation needs
+      size_t young_gen_regions = _g1h->policy()->young_list_target_length();
+      size_t total_regions = _g1h->max_num_regions();
+      size_t g1_reserve_regions = (size_t)ceil((double)total_regions * G1ReservePercent / 100.0);
+      
+      // Total regions we must keep available = young gen + G1's standard reserve
+      size_t reserved_regions = young_gen_regions + g1_reserve_regions;
+      
+      log_debug(gc, sizing)("Uncommit evaluation: regions analysis - committed=%zu, inactive=%u, "
+                           "young_gen=%zu, g1_reserve=%zu, reserved_total=%zu",
+                           committed_regions, inactive_count, young_gen_regions, g1_reserve_regions, 
+                           reserved_regions);
+      
+      // Conservative safety: ensure we always keep more than the reserved amount
+      // This prevents expensive re-commits during the next GC or allocation burst
+      // We add G1MinRegionsToUncommit as a small safety buffer beyond G1's standard reserves
+      size_t min_regions_after_uncommit = reserved_regions + G1MinRegionsToUncommit;
+      
+      if (committed_regions <= min_regions_after_uncommit) {
+        log_debug(gc, sizing)("Time-based uncommit: insufficient excess regions for safe uncommit "
+                             "(committed=%zu <= min_after_uncommit=%zu, reserved=%zu)",
+                             committed_regions, min_regions_after_uncommit, reserved_regions);
+        log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (insufficient excess regions)");
+        return 0; // Not enough excess to uncommit safely
+      }
+      
+      // Only uncommit regions beyond our conservative reserves
+      // Limited by G1MinRegionsToUncommit to avoid thrashing
+      size_t available_for_uncommit = inactive_count;
+      if (available_for_uncommit < G1MinRegionsToUncommit) {
+        log_debug(gc, sizing)("Time-based uncommit: below minimum threshold (%zu < %zu)",
+                             available_for_uncommit, (size_t)G1MinRegionsToUncommit);
+        log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (below minimum threshold)");
+        return 0;
+      }
+      
+      size_t max_inactive_regions = max_shrink_bytes / region_size;
+      
+      // Be very conservative about how much to uncommit at once
+      // Never uncommit more than a small fraction of committed regions
+      size_t max_uncommit_at_once = MAX2((size_t)G1MinRegionsToUncommit, committed_regions / 8);
+      size_t regions_to_uncommit = MIN3(available_for_uncommit, max_inactive_regions, max_uncommit_at_once);
+      
       size_t shrink_bytes = regions_to_uncommit * region_size;
       shrink_bytes = MIN2(shrink_bytes, current_heap - MinHeapSize);
 
@@ -642,7 +682,7 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
         log_debug(gc, sizing)("Uncommit candidates found: %u inactive regions", inactive_count);
         log_info(gc, sizing)("Uncommit evaluation: found %u inactive regions, uncommitting %zu regions (%zuMB)",
                             inactive_count, regions_to_uncommit, shrink_bytes / M);
-        log_debug(gc, sizing)("Uncommit evaluation: Found %u inactive regions out of %u total regions, "
+        log_debug(gc, sizing)("Uncommit evaluation: Found %u inactive regions out of %zu total regions, "
                              "target shrink: %zuB (max allowed: %zuB)",
                              inactive_count, total_regions, shrink_bytes, max_shrink_bytes);
         log_debug(gc, sizing)("Region state transition: %zu regions selected for uncommit",
@@ -658,10 +698,10 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize(bool& expand) {
     }
   }
 
-  log_trace(gc, sizing)("Uncommit evaluation: no uncommit needed "
-                       "(inactive=%u min_required=%zu heap=%zuB min=%zuB)",
-                       inactive_count, G1MinRegionsToUncommit,
-                       _g1h->capacity(), MAX2((size_t)InitialHeapSize, MinHeapSize));
+  log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed "
+                      "(inactive=%u min_required=%zu heap=%zuB min=%zuB)",
+                      inactive_count, (size_t)G1MinRegionsToUncommit,
+                      _g1h->capacity(), MAX2((size_t)InitialHeapSize, MinHeapSize));
 
   return 0;
 }
