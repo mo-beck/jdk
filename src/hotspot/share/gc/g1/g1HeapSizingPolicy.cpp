@@ -227,7 +227,11 @@ size_t G1HeapSizingPolicy::young_collection_resize_amount(bool& expand, size_t a
   assert(GCTimeRatio > 0, "must be");
   expand = false;
 
+<<<<<<< HEAD
   const double long_term_gc_cpu_usage = _analytics->long_term_pause_time_ratio();
+=======
+  const double long_term_gc_cpu_usage = _analytics->long_term_gc_time_ratio();
+>>>>>>> feature/JDK-8357445-time-based-heap-sizing
   const double short_term_gc_cpu_usage = _analytics->short_term_gc_time_ratio();
 
   double gc_cpu_usage_target = 1.0 / (1.0 + GCTimeRatio);
