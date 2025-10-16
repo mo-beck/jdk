@@ -157,6 +157,7 @@ void G1HeapRegion::clear_both_card_tables() {
 void G1HeapRegion::set_free() {
   if (!is_free()) {
     report_region_type_change(G1HeapRegionTraceType::Free);
+    record_activity(); // Record timestamp when region becomes free
   }
   _type.set_free();
 }
