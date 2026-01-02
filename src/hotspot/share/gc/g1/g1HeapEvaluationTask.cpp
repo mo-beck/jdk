@@ -37,11 +37,25 @@
 G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy) :
   G1ServiceTask("G1 Heap Evaluation Task"),
   _g1h(g1h),
-  _heap_sizing_policy(heap_sizing_policy) {
+  _heap_sizing_policy(heap_sizing_policy),
+  _scheduled_gc_count(0) {
 }
 
 void G1HeapEvaluationTask::execute() {
   log_debug(gc, sizing)("Starting uncommit evaluation.");
+
+  // Check if a GC occurred since the task was scheduled. If so, abort this evaluation
+  // because region timestamps may have been reset during GC, invalidating our data.
+  unsigned int current_gc_count = _g1h->total_collections();
+  if (_scheduled_gc_count != 0 && current_gc_count != _scheduled_gc_count) {
+    log_debug(gc, sizing)("Uncommit evaluation: aborting due to intervening GC "
+                         "(scheduled at GC #%u, now at GC #%u)",
+                         _scheduled_gc_count, current_gc_count);
+    // Update GC count for next evaluation and reschedule
+    _scheduled_gc_count = current_gc_count;
+    schedule(G1TimeBasedEvaluationIntervalMillis);
+    return;
+  }
 
   size_t resize_amount;
 
@@ -65,6 +79,7 @@ void G1HeapEvaluationTask::execute() {
     }
   }
 
-  // Schedule the next evaluation.
+  // Update GC count for next evaluation and reschedule
+  _scheduled_gc_count = _g1h->total_collections();
   schedule(G1TimeBasedEvaluationIntervalMillis);
 }
