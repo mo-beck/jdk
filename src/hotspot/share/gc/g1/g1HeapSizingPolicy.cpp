@@ -595,21 +595,21 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
   // Need minimum number of idle regions to proceed.
   if (idle_count >= G1MinRegionsToUncommit) {
     size_t region_size = G1HeapRegion::GrainBytes;
-    size_t current_heap = _g1h->capacity();
+    size_t current_capacity = _g1h->capacity();
     size_t min_heap = MAX2((size_t)InitialHeapSize, MinHeapSize);  // Never go below initial size..
 
     // Calculate maximum bytes we can uncommit while respecting min heap size.
-    size_t max_shrink_bytes = current_heap > min_heap ? current_heap - min_heap : 0;
+    size_t max_shrink_bytes = current_capacity > min_heap ? current_capacity - min_heap : 0;
 
-    log_trace(gc, sizing)("Uncommit evaluation: current_heap=%zuB min_heap=%zuB "
+    log_trace(gc, sizing)("Uncommit evaluation: current_capacity=%zuB min_heap=%zuB "
                          "region_size=%zuB max_shrink=%zuB initial_size=%zuB",
-                         current_heap, min_heap, region_size, max_shrink_bytes, InitialHeapSize);
+                         current_capacity, min_heap, region_size, max_shrink_bytes, InitialHeapSize);
 
     if (max_shrink_bytes > 0 && region_size > 0) {
       // Conservative approach: only uncommit if we have significant excess
       // and preserve space for allocation without triggering GCs
 
-      size_t committed_regions = current_heap / region_size;
+      size_t committed_regions = current_capacity / region_size;
 
       // Use G1's existing reserve calculation plus young generation requirements
       // G1 maintains a reserve (default 10% via G1ReservePercent) for allocation needs
@@ -656,14 +656,14 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
       size_t regions_to_uncommit = MIN3(available_for_uncommit, max_inactive_regions, max_uncommit_at_once);
 
       size_t shrink_bytes = regions_to_uncommit * region_size;
-      shrink_bytes = MIN2(shrink_bytes, current_heap - MinHeapSize);
+      shrink_bytes = MIN2(shrink_bytes, current_capacity - MinHeapSize);
 
-      if (current_heap - shrink_bytes < InitialHeapSize) {
+      if (current_capacity - shrink_bytes < InitialHeapSize) {
         log_info(gc, sizing)("Uncommit evaluation: skipped, would reduce heap below initial size (%zuMB < %zuMB)",
-                            (current_heap - shrink_bytes) / M, InitialHeapSize / M);
+                            (current_capacity - shrink_bytes) / M, InitialHeapSize / M);
         log_debug(gc, sizing)("Skipping uncommit - would reduce heap below initial size: "
                              "current=%zuB shrink=%zuB result=%zuB initial=%zuB min=%zuB",
-                             current_heap, shrink_bytes, current_heap - shrink_bytes,
+                             current_capacity, shrink_bytes, current_capacity - shrink_bytes,
                              InitialHeapSize, MinHeapSize);
         return 0;
       }
