@@ -53,6 +53,7 @@ G1HeapSizingPolicy::G1HeapSizingPolicy(const G1CollectedHeap* g1h, const G1Analy
   _gc_cpu_usage_deviation_counter((G1CPUUsageExpandThreshold / 2) + 1),
   _recent_cpu_usage_deltas(long_term_count_limit()),
   _long_term_count(0) {
+  assert(_analytics != nullptr, "analytics must not be null");
 }
 
 void G1HeapSizingPolicy::reset_cpu_usage_tracking_data() {
@@ -571,13 +572,11 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
   }
 
   // Back off during allocation pressure - only evaluate when truly idle.
-  if (_analytics != nullptr) {
-    double gc_time_ratio = _analytics->short_term_gc_time_ratio();
-    if (gc_time_ratio > 0.05) { // 5% GC time still indicates pressure.
-      log_trace(gc, sizing)("Uncommit evaluation: skipping due to high GC overhead (%1.1f%%)",
-                           gc_time_ratio * 100.0);
-      return 0;
-    }
+  double gc_time_ratio = _analytics->short_term_gc_time_ratio();
+  if (gc_time_ratio > 0.05) { // 5% GC time still indicates pressure.
+    log_trace(gc, sizing)("Uncommit evaluation: skipping due to high GC overhead (%1.1f%%)",
+                         gc_time_ratio * 100.0);
+    return 0;
   }
 
   // Must hold Heap_lock during heap resizing.
@@ -605,7 +604,7 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
                          "region_size=%zuB max_shrink=%zuB initial_size=%zuB",
                          current_capacity, min_heap, region_size, max_shrink_bytes, InitialHeapSize);
 
-    if (max_shrink_bytes > 0 && region_size > 0) {
+    if (max_shrink_bytes > 0) {
       // Conservative approach: only uncommit if we have significant excess
       // and preserve space for allocation without triggering GCs
 
@@ -614,8 +613,7 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
       // Use G1's existing reserve calculation plus young generation requirements
       // G1 maintains a reserve (default 10% via G1ReservePercent) for allocation needs
       size_t young_gen_regions = _g1h->policy()->young_list_target_length();
-      size_t total_regions = _g1h->max_num_regions();
-      size_t g1_reserve_regions = (size_t)ceil((double)total_regions * G1ReservePercent / 100.0);
+      size_t g1_reserve_regions = (size_t)ceil((double)_g1h->max_num_regions() * G1ReservePercent / 100.0);
 
       // Total regions we must keep available = young gen + G1's standard reserve
       size_t reserved_regions = young_gen_regions + g1_reserve_regions;

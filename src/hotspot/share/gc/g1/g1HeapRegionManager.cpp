@@ -632,12 +632,12 @@ uint G1HeapRegionManager::shrink_by_time_based_selection(uint num_regions_to_rem
   GrowableArray<G1HeapRegion*> empty_regions;
 
   // Scan all committed regions to find free ones.
+  Ticks current_time = Ticks::now();
   for (uint i = 0; i < _next_highest_used_hrm_index; i++) {
     if (is_available(i)) {
       G1HeapRegion* hr = at(i);
       if (hr != nullptr && hr->is_free()) {
         // Check if this region should be considered for time-based uncommit.
-        Ticks current_time = Ticks::now();
         Tickspan elapsed = current_time - hr->last_access_time();
         if (elapsed.milliseconds() > G1UncommitDelayMillis) {
           empty_regions.append(hr);
