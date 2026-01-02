@@ -632,15 +632,17 @@ void G1HeapRegionManager::reset_free_region_timestamps() {
   // from interfering with GC-based heap sizing decisions.
   // This ensures regions that were already free before GC don't appear
   // artificially old when time-based evaluation runs.
-  Ticks now = Ticks::now();
-  for (uint i = 0; i < _next_highest_used_hrm_index; i++) {
-    if (is_available(i)) {
-      G1HeapRegion* hr = at(i);
-      if (hr != nullptr && hr->is_free()) {
-        hr->update_last_access_timestamp();
+  class ResetTimestampsClosure : public G1HeapRegionClosure {
+  public:
+    virtual bool do_heap_region(G1HeapRegion* r) {
+      if (r->is_free()) {
+        r->update_last_access_timestamp();
       }
+      return false;
     }
-  }
+  } cl;
+
+  iterate(&cl);
   log_trace(gc, heap)("Reset timestamps for all free regions after GC");
 }
 
@@ -650,18 +652,27 @@ uint G1HeapRegionManager::shrink_by_time_based_selection(uint num_regions_to_rem
 
   // Scan all committed regions to find free ones.
   Ticks current_time = Ticks::now();
-  for (uint i = 0; i < _next_highest_used_hrm_index; i++) {
-    if (is_available(i)) {
-      G1HeapRegion* hr = at(i);
-      if (hr != nullptr && hr->is_free()) {
+  class CollectIdleRegionsClosure : public G1HeapRegionClosure {
+    GrowableArray<G1HeapRegion*>* _empty_regions;
+    Ticks _current_time;
+  public:
+    CollectIdleRegionsClosure(GrowableArray<G1HeapRegion*>* empty_regions, Ticks current_time) :
+      _empty_regions(empty_regions),
+      _current_time(current_time) {}
+
+    virtual bool do_heap_region(G1HeapRegion* r) {
+      if (r->is_free()) {
         // Check if this region should be considered for time-based uncommit.
-        Tickspan elapsed = current_time - hr->last_access_time();
+        Tickspan elapsed = _current_time - r->last_access_time();
         if (elapsed.milliseconds() > G1UncommitDelayMillis) {
-          empty_regions.append(hr);
+          _empty_regions->append(r);
         }
       }
+      return false;
     }
-  }
+  } cl(&empty_regions, current_time);
+
+  iterate(&cl);
 
   if (empty_regions.length() == 0) {
     log_debug(gc, sizing)("Time-based shrink: no eligible empty regions found");
