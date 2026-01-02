@@ -528,15 +528,8 @@ size_t G1HeapSizingPolicy::calculate_time_based_shrink_amount(uint max_regions_t
     return 0;
   }
 
-  // Check if we should back off due to recent GC activity.
-  // If GC overhead is high, don't compete with GC-based sizing.
-  double gc_overhead = _analytics->short_term_gc_time_ratio();
-  if (gc_overhead > 0.10) {  // Back off if GC overhead > 10%.
-    log_debug(gc, sizing)("Time-based shrink: backing off due to GC pressure (overhead=%.2f%%)", gc_overhead * 100);
-    return 0;
-  }
-
   // All candidates are already validated by find_uncommit_candidates_by_time().
+  // GC overhead is already checked in evaluate_heap_resize_for_uncommit().
   uint valid_candidates = (uint)candidates.length();
   size_t shrink_bytes = (size_t)valid_candidates * G1HeapRegion::GrainBytes;
 
@@ -594,11 +587,10 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
   // Must hold Heap_lock during heap resizing.
   MutexLocker ml(Heap_lock);
 
-  ResourceMark rm; // Ensure GrowableArray resources are properly released..
+  ResourceMark rm; // Ensure GrowableArray resources are properly released.
 
   // Count regions eligible for uncommit (don't store them - VM operation will re-evaluate).
   uint idle_count = count_uncommit_candidates();
-  uint total_regions = _g1h->max_num_regions();
 
   log_debug(gc, sizing)("Uncommit evaluation: found %u idle candidates (min required: %zu)",
                        idle_count, (size_t)G1MinRegionsToUncommit);
@@ -607,7 +599,7 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
   if (idle_count >= G1MinRegionsToUncommit) {
     size_t region_size = G1HeapRegion::GrainBytes;
     size_t current_capacity = _g1h->capacity();
-    size_t min_heap = MAX2((size_t)InitialHeapSize, MinHeapSize);  // Never go below initial size..
+    size_t min_heap = MAX2((size_t)InitialHeapSize, MinHeapSize);  // Never go below initial size.
 
     // Calculate maximum bytes we can uncommit while respecting min heap size.
     size_t max_shrink_bytes = current_capacity > min_heap ? current_capacity - min_heap : 0;
@@ -684,11 +676,8 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
         log_debug(gc, sizing)("Uncommit candidates found: %u idle regions", idle_count);
         log_info(gc, sizing)("Uncommit evaluation: found %u idle regions, uncommitting %zu regions (%zuMB)",
                             idle_count, regions_to_uncommit, shrink_bytes / M);
-        log_debug(gc, sizing)("Uncommit evaluation: Found %u idle regions out of %zu total regions, "
-                             "target shrink: %zuB (max allowed: %zuB)",
-                             idle_count, total_regions, shrink_bytes, max_shrink_bytes);
-        log_debug(gc, sizing)("Region state transition: %zu regions selected for uncommit",
-                     regions_to_uncommit);
+        log_debug(gc, sizing)("Uncommit evaluation: target shrink %zuB (max allowed %zuB)",
+                             shrink_bytes, max_shrink_bytes);
 
         // Calculate shrink amount based on time-based candidates
         size_t time_based_shrink = calculate_time_based_shrink_amount((uint)regions_to_uncommit);
