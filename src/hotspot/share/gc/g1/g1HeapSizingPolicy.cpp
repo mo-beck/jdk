@@ -610,16 +610,18 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
 
       size_t committed_regions = current_capacity / region_size;
 
-      // Use G1's existing reserve calculation plus young generation requirements
-      // G1 maintains a reserve (default 10% via G1ReservePercent) for allocation needs
+      // Calculate G1's reserve requirement from committed capacity
+      // G1ReservePercent (default 10%) reserves space for allocation bursts
+      // Young gen is already sized appropriately, so don't add them together
+      size_t g1_reserve_regions = (size_t)ceil((double)committed_regions * G1ReservePercent / 100.0);
       size_t young_gen_regions = _g1h->policy()->young_list_target_length();
-      size_t g1_reserve_regions = (size_t)ceil((double)_g1h->max_num_regions() * G1ReservePercent / 100.0);
-
-      // Total regions we must keep available = young gen + G1's standard reserve
-      size_t reserved_regions = young_gen_regions + g1_reserve_regions;
+      
+      // Reserve is the larger of: G1's percentage reserve OR young gen requirement
+      // This accounts for the fact that young gen is part of the capacity
+      size_t reserved_regions = MAX2(g1_reserve_regions, young_gen_regions);
 
       log_debug(gc, sizing)("Uncommit evaluation: regions analysis - committed=%zu, idle=%u, "
-                           "young_gen=%zu, g1_reserve=%zu, reserved_total=%zu",
+                           "young_gen=%zu, g1_reserve=%zu (from committed), reserved_total=%zu",
                            committed_regions, idle_count, young_gen_regions, g1_reserve_regions,
                            reserved_regions);
 
