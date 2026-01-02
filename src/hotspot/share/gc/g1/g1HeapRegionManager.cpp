@@ -627,6 +627,23 @@ uint G1HeapRegionManager::shrink_by(uint num_regions_to_remove, bool use_time_ba
   return removed;
 }
 
+void G1HeapRegionManager::reset_free_region_timestamps() {
+  // Reset timestamps for all free regions to prevent time-based uncommit
+  // from interfering with GC-based heap sizing decisions.
+  // This ensures regions that were already free before GC don't appear
+  // artificially old when time-based evaluation runs.
+  Ticks now = Ticks::now();
+  for (uint i = 0; i < _next_highest_used_hrm_index; i++) {
+    if (is_available(i)) {
+      G1HeapRegion* hr = at(i);
+      if (hr != nullptr && hr->is_free()) {
+        hr->update_last_access_timestamp();
+      }
+    }
+  }
+  log_trace(gc, heap)("Reset timestamps for all free regions after GC");
+}
+
 uint G1HeapRegionManager::shrink_by_time_based_selection(uint num_regions_to_remove) {
   // Collect all empty regions with their access times for sorting
   GrowableArray<G1HeapRegion*> empty_regions;
