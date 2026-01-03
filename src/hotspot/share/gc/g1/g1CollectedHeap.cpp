@@ -1391,6 +1391,7 @@ G1CollectedHeap::G1CollectedHeap() :
   _old_set("Old Region Set", new OldRegionSetChecker()),
   _humongous_set("Humongous Region Set", new HumongousRegionSetChecker()),
   _bot(nullptr),
+  _heap_evaluation_task(nullptr),
   _listener(),
   _numa(G1NUMA::create()),
   _hrm(),
@@ -1429,7 +1430,6 @@ G1CollectedHeap::G1CollectedHeap() :
   _ref_processor_cm(nullptr),
   _is_alive_closure_cm(),
   _is_subject_to_discovery_cm(this),
-  _heap_evaluation_task(nullptr),
   _region_attr() {
 
   _verifier = new G1HeapVerifier(this);
