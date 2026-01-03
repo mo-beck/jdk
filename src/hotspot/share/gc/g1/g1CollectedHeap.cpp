@@ -1352,8 +1352,8 @@ G1CollectedHeap::G1CollectedHeap() :
   _ref_processor_cm(nullptr),
   _is_alive_closure_cm(),
   _is_subject_to_discovery_cm(this),
-  _region_attr(),
-  _heap_evaluation_task(nullptr) {
+  _heap_evaluation_task(nullptr),
+  _region_attr() {
 
   _verifier = new G1HeapVerifier(this);
 
