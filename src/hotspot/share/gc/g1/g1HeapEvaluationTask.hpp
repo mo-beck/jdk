@@ -36,7 +36,6 @@ class G1HeapSizingPolicy;
 class G1HeapEvaluationTask : public G1ServiceTask {
   G1CollectedHeap* _g1h;
   G1HeapSizingPolicy* _heap_sizing_policy;
-  unsigned int _scheduled_gc_count;
 
 public:
   G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy);
