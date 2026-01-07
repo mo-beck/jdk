@@ -38,7 +38,6 @@
 #include "gc/g1/g1ConcurrentMarkThread.inline.hpp"
 #include "gc/g1/g1ConcurrentRefine.hpp"
 #include "gc/g1/g1ConcurrentRefineThread.hpp"
-#include "gc/g1/g1DirtyCardQueue.hpp"
 #include "gc/g1/g1EvacStats.inline.hpp"
 #include "gc/g1/g1FullCollector.hpp"
 #include "gc/g1/g1GCCounters.hpp"
@@ -3248,7 +3247,6 @@ void G1CollectedHeap::retire_mutator_alloc_region(G1HeapRegion* alloc_region,
   assert_heap_locked_or_at_safepoint(true /* should_be_vm_thread */);
   assert(alloc_region->is_eden(), "all mutator alloc regions should be eden");
 
-  collection_set()->add_eden_region(alloc_region);
   increase_used(allocated_bytes);
   _eden.add_used_bytes(allocated_bytes);
   G1HeapRegionPrinter::retire(alloc_region);

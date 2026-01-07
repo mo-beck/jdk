@@ -371,7 +371,6 @@
           "scan cost related prediction samples. A sample must involve "    \
           "the same or more than this number of code roots to be used.")    \
                                                                             \
-<<<<<<< HEAD
   develop(bool, G1ForceOptionalEvacuation, false,                           \
           "Force optional evacuation for all GCs where there are old gen "  \
           "collection set candidates."                                      \

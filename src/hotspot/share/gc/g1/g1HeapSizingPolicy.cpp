@@ -564,12 +564,13 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
     return 0;
   }
 
-  // Back off during allocation pressure - only uncommit when GC overhead is well below target.
+  // Back off during allocation pressure - only uncommit when GC overhead is reasonably low.
   // Use the user's GCTimeRatio setting (default 24 = 4% GC time goal) as the baseline.
-  // Only uncommit if we're using less than 50% of our GC time budget (truly idle).
+  // Only uncommit if we're using less than 125% of our GC time budget.
+  // With default GCTimeRatio=24 (4% goal), this gives ~5% threshold.
   double gc_time_ratio = _analytics->short_term_gc_time_ratio();
   double gc_time_goal = 1.0 / (1.0 + GCTimeRatio);
-  double gc_time_threshold = gc_time_goal * 0.5;  // 50% of goal provides safety margin
+  double gc_time_threshold = gc_time_goal * 1.25;  // 125% of goal - aggressive but safe with our safeguards
   
   if (gc_time_ratio > gc_time_threshold) {
     log_trace(gc, sizing)("Uncommit evaluation: skipping, GC overhead (%1.1f%%) exceeds "
