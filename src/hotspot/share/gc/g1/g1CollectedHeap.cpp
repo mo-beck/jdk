@@ -856,13 +856,6 @@ void G1CollectedHeap::prepare_for_mutator_after_full_collection(size_t allocatio
   start_new_collection_set();
   _allocator->init_mutator_alloc_regions();
 
-  // Reset free region timestamps to prevent time-based uncommit from interfering
-  // with GC-based heap sizing. Regions that were already free before GC would
-  // otherwise retain old timestamps and be incorrectly identified as idle.
-  if (G1UseTimeBasedHeapSizing) {
-    _hrm.reset_free_region_timestamps();
-  }
-
   // Post collection state updates.
   MetaspaceGC::compute_new_size();
 }
@@ -2802,13 +2795,6 @@ void G1CollectedHeap::prepare_for_mutator_after_young_collection() {
   // Start a new incremental collection set for the mutator phase.
   start_new_collection_set();
   _allocator->init_mutator_alloc_regions();
-
-  // Reset free region timestamps to prevent time-based uncommit from interfering
-  // with GC-based heap sizing. Regions that were already free before GC would
-  // otherwise retain old timestamps and be incorrectly identified as idle.
-  if (G1UseTimeBasedHeapSizing) {
-    _hrm.reset_free_region_timestamps();
-  }
 
   phase_times()->record_prepare_for_mutator_time_ms((Ticks::now() - start).seconds() * 1000.0);
 }
