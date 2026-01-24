@@ -287,10 +287,6 @@ public:
   // actual number uncommitted.
   uint uncommit_inactive_regions(uint limit);
 
-  // Reset access timestamps on all free regions to prevent interference with GC-based sizing.
-  // Called after GC operations to give free regions a fresh timestamp baseline.
-  void reset_free_region_timestamps();
-
   void verify();
 
   // Do some sanity checking.

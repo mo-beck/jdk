@@ -538,8 +538,8 @@ size_t G1HeapSizingPolicy::calculate_time_based_shrink_amount(uint max_regions_t
 }
 
 bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
-  // Note: Caller already guarantees hr->is_empty() is true.
-  // Empty regions should always be free and not in collection set in normal operation.
+  // Note: Caller guarantees hr->is_free() is true. All free regions are empty.
+  // Free regions should not be in collection set in normal operation.
 
   Ticks current_time = Ticks::now();
   Ticks last_access = hr->last_access_time();
@@ -551,8 +551,7 @@ bool G1HeapSizingPolicy::should_uncommit_region(G1HeapRegion* hr) const {
 
   bool should_uncommit = elapsed.milliseconds() > G1UncommitDelayMillis;
   if (should_uncommit) {
-    log_debug(gc, sizing)("Region state transition: transitioning from active to idle");
-    log_debug(gc, sizing)("Region state transition: Region %u transitioning from active to idle after " JLONG_FORMAT "ms idle",
+    log_debug(gc, sizing)("Region %u transitioning to idle after " JLONG_FORMAT "ms.",
                   hr->hrm_index(), (jlong)elapsed.milliseconds());
   }
 
@@ -581,7 +580,6 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
     return 0;
   }
 
-  // Must hold Heap_lock during heap resizing.
   MutexLocker ml(Heap_lock);
 
   ResourceMark rm; // Ensure GrowableArray resources are properly released.
@@ -626,9 +624,9 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
                            committed_regions, idle_count, young_gen_regions, g1_reserve_regions,
                            reserved_regions);
 
-      // Conservative safety: ensure we always keep more than the reserved amount
-      // This prevents expensive re-commits during the next GC or allocation burst
-      // We add G1MinRegionsToUncommit as a small safety buffer beyond G1's standard reserves
+      // Conservative safety: keep reserved_regions (max of G1ReservePercent or young_gen)
+      // plus G1MinRegionsToUncommit as hysteresis buffer to prevent uncommit/recommit cycles.
+      // This prevents expensive re-commits during the next GC or allocation burst.
       size_t min_regions_after_uncommit = reserved_regions + G1MinRegionsToUncommit;
 
       if (committed_regions <= min_regions_after_uncommit) {
@@ -639,15 +637,9 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
         return 0; // Not enough excess to uncommit safely
       }
 
-      // Only uncommit regions beyond our conservative reserves
-      // Limited by G1MinRegionsToUncommit to avoid thrashing
+      // available_for_uncommit is idle_count, which is already >= G1MinRegionsToUncommit
+      // from the entry check at line 595, so no need to re-check here.
       size_t available_for_uncommit = idle_count;
-      if (available_for_uncommit < G1MinRegionsToUncommit) {
-        log_debug(gc, sizing)("Time-based uncommit: below minimum threshold (%zu < %zu)",
-                             available_for_uncommit, (size_t)G1MinRegionsToUncommit);
-        log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (below minimum threshold)");
-        return 0;
-      }
 
       size_t max_inactive_regions = max_shrink_bytes / region_size;
 
@@ -670,10 +662,9 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
       }
 
       if (shrink_bytes > 0) {
-        log_debug(gc, sizing)("Uncommit candidates found: %u idle regions", idle_count);
-        log_info(gc, sizing)("Uncommit evaluation: found %u idle regions, uncommitting %zu regions (%zuMB)",
+        log_info(gc, sizing)("Uncommit evaluation: found %u idle regions, uncommitting %zu regions (%zuMB).",
                             idle_count, regions_to_uncommit, shrink_bytes / M);
-        log_debug(gc, sizing)("Uncommit evaluation: target shrink %zuB (max allowed %zuB)",
+        log_debug(gc, sizing)("Uncommit evaluation: target shrink %zuB (max allowed %zuB).",
                              shrink_bytes, max_shrink_bytes);
 
         // Calculate shrink amount based on time-based candidates
