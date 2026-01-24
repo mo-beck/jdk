@@ -55,8 +55,8 @@ void G1HeapEvaluationTask::execute() {
   static int evaluation_count = 0;
 
   if (resize_amount > 0) {
-    log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB using time-based selection.", resize_amount / M);
-    log_debug(gc, sizing)("Uncommit evaluation: policy recommends shrinking by %zuB.", resize_amount);
+    log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB (%zuB) using time-based selection.",
+                         resize_amount / M, resize_amount);
     // Request VM operation outside of suspendible thread set.
     _g1h->request_heap_shrink(resize_amount);
   } else {
