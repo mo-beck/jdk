@@ -31,6 +31,7 @@
 #include "gc/g1/g1RegionToSpaceMapper.hpp"
 #include "memory/allocation.hpp"
 #include "services/memoryUsage.hpp"
+#include "utilities/ticks.hpp"
 
 class G1HeapRegion;
 class G1HeapRegionClaimer;
@@ -124,6 +125,11 @@ class G1HeapRegionManager: public CHeapObj<mtGC> {
   G1RegionToSpaceMapper* _heap_mapper;
   G1RegionToSpaceMapper* _bitmap_mapper;
   G1FreeRegionList _free_list;
+
+  // Global timestamp for time-based heap sizing. Used as a baseline for determining
+  // region idleness. Regions that became free before this timestamp are considered
+  // idle since the last GC. Updated after each GC via reset_free_region_timestamps().
+  Ticks _last_gc_timestamp;
 
   void expand(uint index, uint num_regions, WorkerThreads* pretouch_workers = nullptr);
 
@@ -287,8 +293,9 @@ public:
   // actual number uncommitted.
   uint uncommit_inactive_regions(uint limit);
 
-  // Reset access timestamps on all free regions to prevent interference with GC-based sizing.
-  // Called after GC operations to give free regions a fresh timestamp baseline.
+  // Record the timestamp of the last GC for time-based heap sizing.
+  // Regions that became free before this timestamp are candidates for uncommit
+  // if they remain idle for G1UncommitDelayMillis. O(1) operation.
   void reset_free_region_timestamps();
 
   void verify();

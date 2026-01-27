@@ -69,7 +69,8 @@ G1HeapRegionManager::G1HeapRegionManager() :
   _next_highest_used_hrm_index(0),
   _regions(), _heap_mapper(nullptr),
   _bitmap_mapper(nullptr),
-  _free_list("Free list", new G1MasterFreeRegionListChecker())
+  _free_list("Free list", new G1MasterFreeRegionListChecker()),
+  _last_gc_timestamp()
 { }
 
 void G1HeapRegionManager::initialize(G1RegionToSpaceMapper* heap_storage,
@@ -628,22 +629,11 @@ uint G1HeapRegionManager::shrink_by(uint num_regions_to_remove, bool use_time_ba
 }
 
 void G1HeapRegionManager::reset_free_region_timestamps() {
-  // Reset timestamps for all free regions to prevent time-based uncommit
-  // from interfering with GC-based heap sizing decisions.
-  // This ensures regions that were already free before GC don't appear
-  // artificially old when time-based evaluation runs.
-  class ResetTimestampsClosure : public G1HeapRegionClosure {
-  public:
-    virtual bool do_heap_region(G1HeapRegion* r) {
-      if (r->is_free()) {
-        r->update_last_access_timestamp();
-      }
-      return false;
-    }
-  } cl;
-
-  iterate(&cl);
-  log_trace(gc, heap)("Reset timestamps for all free regions after GC");
+  // Record the current time as the baseline for time-based heap sizing.
+  // Regions that became free before this timestamp are candidates for uncommit.
+  // This O(1) approach replaces per-region iteration, improving GC throughput.
+  _last_gc_timestamp = Ticks::now();
+  log_trace(gc, heap)("Updated GC timestamp baseline for time-based heap sizing");
 }
 
 uint G1HeapRegionManager::shrink_by_time_based_selection(uint num_regions_to_remove) {
@@ -652,25 +642,35 @@ uint G1HeapRegionManager::shrink_by_time_based_selection(uint num_regions_to_rem
 
   // Scan all committed regions to find free ones.
   Ticks current_time = Ticks::now();
+  Ticks last_gc_time = _last_gc_timestamp;
+
   class CollectIdleRegionsClosure : public G1HeapRegionClosure {
     GrowableArray<G1HeapRegion*>* _empty_regions;
     Ticks _current_time;
+    Ticks _last_gc_time;
   public:
-    CollectIdleRegionsClosure(GrowableArray<G1HeapRegion*>* empty_regions, Ticks current_time) :
+    CollectIdleRegionsClosure(GrowableArray<G1HeapRegion*>* empty_regions,
+                              Ticks current_time,
+                              Ticks last_gc_time) :
       _empty_regions(empty_regions),
-      _current_time(current_time) {}
+      _current_time(current_time),
+      _last_gc_time(last_gc_time) {}
 
     virtual bool do_heap_region(G1HeapRegion* r) {
       if (r->is_free()) {
-        // Check if this region should be considered for time-based uncommit.
-        Tickspan elapsed = _current_time - r->last_access_time();
+        // Use the later of region's timestamp or last GC time as the effective timestamp.
+        // This treats all free regions as if they were "touched" at GC time,
+        // matching the semantics of resetting timestamps after GC (O(1) instead of O(n)).
+        Ticks region_time = r->last_access_time();
+        Ticks effective_time = MAX2(region_time, _last_gc_time);
+        Tickspan elapsed = _current_time - effective_time;
         if (elapsed.milliseconds() > G1UncommitDelayMillis) {
           _empty_regions->append(r);
         }
       }
       return false;
     }
-  } cl(&empty_regions, current_time);
+  } cl(&empty_regions, current_time, last_gc_time);
 
   iterate(&cl);
 
