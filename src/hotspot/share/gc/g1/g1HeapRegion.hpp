@@ -254,7 +254,7 @@ private:
   // NUMA node.
   uint _node_index;
 
-  // Time-based heap sizing: tracks last allocation/access time
+  // Time-based heap sizing: tracks when region became free.
   Ticks _last_access_timestamp;
 
   // Number of objects in this region that are currently pinned.
@@ -560,7 +560,7 @@ public:
   uint node_index() const { return _node_index; }
   void set_node_index(uint node_index) { _node_index = node_index; }
 
-  // Time-based heap sizing methods
+  // Time-based heap sizing methods.
   Ticks last_access_time() const {
     return _last_access_timestamp;
   }

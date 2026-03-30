@@ -455,21 +455,21 @@ uint G1HeapSizingPolicy::count_uncommit_candidates() {
 
   // Count regions that would be eligible for uncommit.
   class CountUncommitCandidatesClosure : public G1HeapRegionClosure {
-    uint* _inactive_regions;
+    uint& _inactive_regions;
     const G1HeapSizingPolicy* _policy;
   public:
-    CountUncommitCandidatesClosure(uint* inactive_regions, const G1HeapSizingPolicy* policy) :
+    CountUncommitCandidatesClosure(uint& inactive_regions, const G1HeapSizingPolicy* policy) :
       _inactive_regions(inactive_regions),
       _policy(policy) {}
 
     virtual bool do_heap_region(G1HeapRegion* r) {
       // Note: All free regions are empty, so only check is_free()
       if (r->is_free() && _policy->should_uncommit_region(r)) {
-        (*_inactive_regions)++;
+        _inactive_regions++;
       }
       return false;
     }
-  } cl(&inactive_regions, this);
+  } cl(inactive_regions, this);
 
   log_debug(gc, sizing)("Full region scan: counting uncommit candidates");
   _g1h->heap_region_iterate(&cl);
@@ -482,12 +482,12 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
   // Check each heap region for inactivity, limiting to max_candidates for efficiency.
   class UncommitCandidatesClosure : public G1HeapRegionClosure {
     GrowableArray<G1HeapRegion*>* _candidates;
-    uint* _inactive_regions;
+    uint& _inactive_regions;
     uint _max_candidates;
     const G1HeapSizingPolicy* _policy;
   public:
     UncommitCandidatesClosure(GrowableArray<G1HeapRegion*>* candidates,
-                             uint* inactive_regions,
+                             uint& inactive_regions,
                              uint max_candidates,
                              const G1HeapSizingPolicy* policy) :
       _candidates(candidates),
@@ -499,7 +499,7 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
       // Note: All free regions are empty, so only check is_free().
       if (r->is_free() && _policy->should_uncommit_region(r)) {
         _candidates->append(r);
-        (*_inactive_regions)++;
+        _inactive_regions++;
         // Stop early if we have enough candidates.
         if ((uint)_candidates->length() >= _max_candidates) {
           return true; // Stop iteration.
@@ -507,7 +507,7 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
       }
       return false;
     }
-  } cl(candidates, &inactive_regions, max_candidates, this);
+  } cl(candidates, inactive_regions, max_candidates, this);
 
   _g1h->heap_region_iterate(&cl);
 
