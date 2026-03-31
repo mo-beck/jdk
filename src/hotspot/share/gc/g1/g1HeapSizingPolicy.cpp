@@ -599,27 +599,25 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
     if (max_shrink_bytes > 0) {
       size_t committed_regions = current_capacity / region_size;
 
-      // G1ReservePercent reserves space for allocation bursts
+      // G1ReservePercent reserves free space for allocation bursts.
       size_t g1_reserve_regions = (size_t)ceil((double)committed_regions * G1ReservePercent / 100.0);
+      // Young gen regions are committed and in use.
       size_t young_gen_regions = _g1h->policy()->young_list_target_length();
 
-      // Reserve is larger of G1ReservePercent or young gen requirement
-      size_t reserved_regions = MAX2(g1_reserve_regions, young_gen_regions);
+      // Minimum committed = young gen (in use) + reserve buffer (free).
+      size_t min_committed_regions = g1_reserve_regions + young_gen_regions;
 
       log_debug(gc, sizing)("Uncommit evaluation: regions analysis - committed=%zu, idle=%u, "
-                           "young_gen=%zu, g1_reserve=%zu (from committed), reserved_total=%zu",
+                           "young_gen=%zu, g1_reserve=%zu, min_committed=%zu",
                            committed_regions, idle_count, young_gen_regions, g1_reserve_regions,
-                           reserved_regions);
+                           min_committed_regions);
 
-      // Hysteresis buffer to prevent uncommit/recommit cycles
-      size_t min_regions_after_uncommit = reserved_regions + G1MinRegionsToUncommit;
-
-      if (committed_regions <= min_regions_after_uncommit) {
-        log_debug(gc, sizing)("Time-based uncommit: insufficient excess regions for safe uncommit "
-                             "(committed=%zu <= min_after_uncommit=%zu, reserved=%zu)",
-                             committed_regions, min_regions_after_uncommit, reserved_regions);
-        log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (insufficient excess regions)");
-        return 0; // Not enough excess to uncommit safely
+      if (committed_regions <= min_committed_regions) {
+        log_debug(gc, sizing)("Time-based uncommit: no excess regions beyond minimum "
+                             "(committed=%zu <= min_committed=%zu)",
+                             committed_regions, min_committed_regions);
+        log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (no excess regions)");
+        return 0;
       }
 
       size_t available_for_uncommit = idle_count;
