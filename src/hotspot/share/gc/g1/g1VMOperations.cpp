@@ -196,7 +196,7 @@ void VM_G1ShrinkHeap::doit() {
   uint max_regions_to_shrink = (uint)(_bytes / G1HeapRegion::GrainBytes);
 
   GrowableArray<G1HeapRegion*> candidates(max_regions_to_shrink);
-  _g1h->heap_sizing_policy()->find_uncommit_candidates_by_time(&candidates, max_regions_to_shrink);
+  _g1h->heap_sizing_policy()->find_uncommit_candidates_by_time(&candidates);
 
   if (candidates.length() == 0) {
     log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: no valid candidates at safepoint, skipping shrink");

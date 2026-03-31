@@ -476,23 +476,20 @@ uint G1HeapSizingPolicy::count_uncommit_candidates() {
   return idle_regions;
 }
 
-void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRegion*>* candidates, uint max_candidates) {
+void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRegion*>* candidates) {
   uint idle_regions = 0;
 
-  // Check each heap region for inactivity, limiting to max_candidates for efficiency.
+  // Check each heap region for inactivity, limiting to candidates capacity.
   class UncommitCandidatesClosure : public G1HeapRegionClosure {
     GrowableArray<G1HeapRegion*>* _candidates;
     uint& _idle_regions;
-    uint _max_candidates;
     const G1HeapSizingPolicy* _policy;
   public:
     UncommitCandidatesClosure(GrowableArray<G1HeapRegion*>* candidates,
                              uint& idle_regions,
-                             uint max_candidates,
                              const G1HeapSizingPolicy* policy) :
       _candidates(candidates),
       _idle_regions(idle_regions),
-      _max_candidates(max_candidates),
       _policy(policy) {}
 
     virtual bool do_heap_region(G1HeapRegion* r) {
@@ -501,19 +498,19 @@ void G1HeapSizingPolicy::find_uncommit_candidates_by_time(GrowableArray<G1HeapRe
         _candidates->append(r);
         _idle_regions++;
         // Stop early if we have enough candidates.
-        if ((uint)_candidates->length() >= _max_candidates) {
+        if (_candidates->length() >= _candidates->capacity()) {
           return true; // Stop iteration.
         }
       }
       return false;
     }
-  } cl(candidates, idle_regions, max_candidates, this);
+  } cl(candidates, idle_regions, this);
 
   _g1h->heap_region_iterate(&cl);
 
   if (idle_regions > 0) {
-    log_debug(gc, sizing)("Time-based uncommit evaluation: found %u idle regions (requested %u)",
-                         idle_regions, max_candidates);
+    log_debug(gc, sizing)("Time-based uncommit evaluation: found %u idle regions (max %d)",
+                         idle_regions, candidates->capacity());
   }
 }
 
@@ -523,7 +520,7 @@ size_t G1HeapSizingPolicy::calculate_time_based_shrink_amount(uint max_regions_t
   GrowableArray<G1HeapRegion*> candidates(max_regions_to_shrink);
 
   // Find time-based candidates.
-  find_uncommit_candidates_by_time(&candidates, max_regions_to_shrink);
+  find_uncommit_candidates_by_time(&candidates);
 
   if (candidates.length() == 0) {
     log_debug(gc, sizing)("Time-based shrink: no candidates found");
