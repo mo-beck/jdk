@@ -1243,7 +1243,7 @@ void G1CollectedHeap::shrink_helper_with_time_based_selection(size_t shrink_byte
 
   size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
   log_debug(gc, ergo, heap)("Time-based shrink: Requested shrinking amount: %zuB actual shrinking amount: %zuB (%u regions)",
-                           shrink_bytes, shrunk_bytes, num_regions_removed);
+                            shrink_bytes, shrunk_bytes, num_regions_removed);
 
   if (num_regions_removed > 0) {
     log_info(gc, heap)("Time-based shrink: uncommitted %u oldest regions (%zuMB), heap size now %zuMB",

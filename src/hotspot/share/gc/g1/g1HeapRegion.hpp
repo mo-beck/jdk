@@ -565,10 +565,6 @@ public:
     return _last_access_timestamp;
   }
 
-  void update_last_access_timestamp() {
-    _last_access_timestamp = Ticks::now();
-  }
-
   // Verify that the entries on the code root list for this
   // region are live and include at least one pointer into this region.
   // Returns whether there has been a failure.
