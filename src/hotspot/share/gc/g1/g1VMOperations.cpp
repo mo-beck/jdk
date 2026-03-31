@@ -178,8 +178,18 @@ void VM_G1PauseCleanup::work() {
   cm->cleanup();
 }
 
+bool VM_G1ShrinkHeap::skip_operation() const {
+  // A GC occurred since we scheduled this operation; skip shrinking since
+  // GC already determined the appropriate heap size.
+  if (_g1h->total_collections() != _gc_count_before) {
+    log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: skipping - GC occurred since scheduling");
+    return true;
+  }
+  return VM_GC_Operation::skip_operation();
+}
+
 void VM_G1ShrinkHeap::doit() {
-  // Re-evaluate candidates at safepoint since heap state may have changed
+  // Re-evaluate candidates at safepoint since heap state may have changed.
   log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: re-evaluating heap state at safepoint");
 
   // Max regions based on original request

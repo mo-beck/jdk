@@ -1331,9 +1331,12 @@ void G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
     return;
   }
 
+  // Capture GC count before scheduling to detect if a GC occurs in the interim.
+  uint gc_count_before = total_collections();
+
   // Always schedule a VM operation for proper synchronization with GC.
   // The VM operation will re-evaluate which regions to uncommit at the time of execution.
-  VM_G1ShrinkHeap op(this, shrink_bytes);
+  VM_G1ShrinkHeap op(this, gc_count_before, shrink_bytes);
   VMThread::execute(&op);
 }
 
