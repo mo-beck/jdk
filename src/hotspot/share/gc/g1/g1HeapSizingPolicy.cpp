@@ -32,11 +32,9 @@
 #include "gc/g1/g1_globals.hpp"  // For flag declarations
 #include "gc/shared/gc_globals.hpp"
 #include "logging/log.hpp"
-#include "memory/resourceArea.hpp"
 #include "runtime/globals.hpp"
 #include "runtime/mutexLocker.hpp"
 #include "runtime/os.hpp"
-#include "runtime/safepoint.hpp"
 #include "utilities/debug.hpp"
 #include "utilities/globalDefinitions.hpp"
 #include "utilities/ticks.hpp"
@@ -532,76 +530,76 @@ size_t G1HeapSizingPolicy::evaluate_heap_resize_for_uncommit() {
                        idle_count, G1MinRegionsToUncommit);
 
   // Need minimum number of idle regions to proceed.
-  if (idle_count >= G1MinRegionsToUncommit) {
-    size_t region_size = G1HeapRegion::GrainBytes;
-    size_t current_capacity = _g1h->capacity();
-    size_t min_heap = MAX2(InitialHeapSize, MinHeapSize);  // Never go below initial size.
-
-    // Max bytes we can uncommit while respecting min heap size.
-    size_t max_shrink_bytes = current_capacity > min_heap ? current_capacity - min_heap : 0;
-
-    log_trace(gc, sizing)("Uncommit evaluation: current_capacity=%zuB min_heap=%zuB "
-                         "region_size=%zuB max_shrink=%zuB initial_size=%zuB",
-                         current_capacity, min_heap, region_size, max_shrink_bytes, InitialHeapSize);
-
-    if (max_shrink_bytes > 0) {
-      size_t committed_regions = current_capacity / region_size;
-
-      // G1ReservePercent reserves free space for allocation bursts.
-      size_t g1_reserve_regions = (size_t)ceil((double)committed_regions * G1ReservePercent / 100.0);
-      // Young gen regions are committed and in use.
-      size_t young_gen_regions = _g1h->policy()->young_list_target_length();
-
-      // Minimum committed = young gen (in use) + reserve buffer (free).
-      size_t min_committed_regions = g1_reserve_regions + young_gen_regions;
-
-      log_debug(gc, sizing)("Uncommit evaluation: regions analysis - committed=%zu, idle=%u, "
-                           "young_gen=%zu, g1_reserve=%zu, min_committed=%zu",
-                           committed_regions, idle_count, young_gen_regions, g1_reserve_regions,
-                           min_committed_regions);
-
-      if (committed_regions <= min_committed_regions) {
-        log_debug(gc, sizing)("Uncommit evaluation: no excess regions beyond minimum "
-                             "(committed=%zu <= min_committed=%zu)",
-                             committed_regions, min_committed_regions);
-        return 0;
-      }
-
-      size_t available_for_uncommit = idle_count;
-
-      size_t max_idle_regions = max_shrink_bytes / region_size;
-
-      // Limit uncommit to a small fraction of committed regions.
-      size_t max_uncommit_at_once = MAX2(G1MinRegionsToUncommit, committed_regions / 8);
-      size_t regions_to_uncommit = MIN3(available_for_uncommit, max_idle_regions, max_uncommit_at_once);
-
-      size_t shrink_bytes = regions_to_uncommit * region_size;
-      shrink_bytes = MIN2(shrink_bytes, current_capacity - MinHeapSize);
-
-      if (current_capacity - shrink_bytes < InitialHeapSize) {
-        log_debug(gc, sizing)("Uncommit evaluation: skipped, would reduce heap below initial size "
-                             "(current=%zuB shrink=%zuB result=%zuB initial=%zuB)",
-                             current_capacity, shrink_bytes, current_capacity - shrink_bytes,
-                             InitialHeapSize);
-        return 0;
-      }
-
-      if (shrink_bytes > 0) {
-        log_info(gc, sizing)("Uncommit evaluation: found %u idle regions, uncommitting %zu regions (%zuMB).",
-                            idle_count, regions_to_uncommit, shrink_bytes / M);
-        log_debug(gc, sizing)("Uncommit evaluation: target shrink %zuB (max allowed %zuB).",
-                             shrink_bytes, max_shrink_bytes);
-        return shrink_bytes;
-      }
-
-      return 0;
-    }
+  if (idle_count < G1MinRegionsToUncommit) {
+    log_debug(gc, sizing)("Uncommit evaluation: no heap uncommit needed "
+                         "(idle=%u min_required=%zu heap=%zuB min=%zuB)",
+                         idle_count, G1MinRegionsToUncommit,
+                         _g1h->capacity(), _g1h->min_capacity());
+    return 0;
   }
 
-  log_debug(gc, sizing)("Uncommit evaluation: no heap uncommit needed "
-                       "(idle=%u min_required=%zu heap=%zuB min=%zuB)",
-                       idle_count, G1MinRegionsToUncommit,
-                       _g1h->capacity(), MAX2(InitialHeapSize, MinHeapSize));
+  size_t region_size = G1HeapRegion::GrainBytes;
+  size_t current_capacity = _g1h->capacity();
 
-  return 0;
+  // Compute the used bytes the same way as full_collection_resize_amount(),
+  // so TBS and GC sizing agree on the same inputs.
+  size_t used_bytes = current_capacity - _g1h->unused_committed_regions_in_bytes();
+
+  // Coordinate with GC-based heap sizing to avoid TBS and GC fighting over
+  // heap size. When MaxHeapFreeRatio < 100, the Full GC shrink path is active
+  // and uses that ratio as its floor - TBS must respect the same floor.
+  // When MaxHeapFreeRatio is 100 (G1 ergonomic default since JDK-8238686),
+  // the MHFR-based Full GC sizing path is inactive - fall back to min capacity.
+  size_t maximum_desired_capacity;
+  if (MaxHeapFreeRatio < 100) {
+    maximum_desired_capacity = target_heap_capacity(used_bytes, MaxHeapFreeRatio);
+    maximum_desired_capacity = MAX2(maximum_desired_capacity, _g1h->min_capacity());
+  } else {
+    maximum_desired_capacity = _g1h->min_capacity();
+  }
+
+  // Preserve young gen regions and G1's reserve to avoid in-pause commits and
+  // premature GCs when the application resumes or allocates humongous objects.
+  size_t young_gen_regions = _g1h->policy()->young_list_target_length();
+  size_t g1_reserve_regions = (size_t)ceil((double)_g1h->max_num_regions() * G1ReservePercent / 100.0);
+  size_t min_committed_bytes = (used_bytes / region_size + young_gen_regions + g1_reserve_regions) * region_size;
+  maximum_desired_capacity = MAX2(maximum_desired_capacity, min_committed_bytes);
+
+  log_debug(gc, sizing)("Uncommit evaluation: young_gen=%zu reserve=%zu min_committed=%zuB",
+                       young_gen_regions, g1_reserve_regions, min_committed_bytes);
+
+  if (current_capacity <= maximum_desired_capacity) {
+    log_debug(gc, sizing)("Uncommit evaluation: capacity within GC sizing bounds "
+                         "(capacity=%zuB <= max_desired=%zuB, used=%zuB, MaxHeapFreeRatio=%zu)",
+                         current_capacity, maximum_desired_capacity, used_bytes, (size_t)MaxHeapFreeRatio);
+    return 0;
+  }
+
+  // TBS can shrink down to maximum_desired_capacity without conflicting with GC.
+  size_t max_shrink_bytes = current_capacity - maximum_desired_capacity;
+
+  log_debug(gc, sizing)("Uncommit evaluation: capacity=%zuB used=%zuB max_desired=%zuB "
+                       "max_shrink=%zuB idle=%u (MaxHeapFreeRatio=%zu)",
+                       current_capacity, used_bytes, maximum_desired_capacity,
+                       max_shrink_bytes, idle_count, (size_t)MaxHeapFreeRatio);
+
+  // Limit to idle regions actually available and to the allowed shrink range.
+  size_t max_idle_bytes = (size_t)idle_count * region_size;
+  size_t shrink_bytes = MIN2(max_idle_bytes, max_shrink_bytes);
+
+  // Align to region boundaries.
+  shrink_bytes = align_down(shrink_bytes, region_size);
+
+  if (shrink_bytes == 0) {
+    log_debug(gc, sizing)("Uncommit evaluation: shrink amount too small after alignment");
+    return 0;
+  }
+
+  size_t regions_to_uncommit = shrink_bytes / region_size;
+
+  log_info(gc, sizing)("Uncommit evaluation: found %u idle regions, uncommitting %zu regions (%zuMB).",
+                      idle_count, regions_to_uncommit, shrink_bytes / M);
+  log_debug(gc, sizing)("Uncommit evaluation: target shrink %zuB (max allowed %zuB).",
+                       shrink_bytes, max_shrink_bytes);
+  return shrink_bytes;
 }
