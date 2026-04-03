@@ -1212,11 +1212,9 @@ void G1CollectedHeap::shrink_with_time_based_selection(size_t shrink_bytes) {
 
   _verifier->verify_region_sets_optional();
 
-  // We should only reach here from the service thread during idle time.
-  // Note: Unlike full GC shrinking, time-based shrink may have an active mutator alloc region.
-  // This is safe because we only remove free regions, not allocated ones.
-  assert(GCCause::is_user_requested_gc(gc_cause()) || gc_cause() == GCCause::_no_gc,
-         "unexpected GC cause: %s", GCCause::to_string(gc_cause()));
+  // Called from VMThread via VM_G1ShrinkHeap during time-based heap evaluation.
+  // This is not a GC - just uncommitting free regions at a safepoint.
+  assert_at_safepoint_on_vm_thread();
 
   // For time-based shrink, we use time-aware selection instead of removing from end.
   _hrm.remove_all_free_regions();
@@ -1326,17 +1324,13 @@ void G1CollectedHeap::shrink(size_t shrink_bytes) {
   _verifier->verify_region_sets_optional();
 }
 
-void G1CollectedHeap::request_heap_shrink(size_t shrink_bytes) {
-  if (shrink_bytes == 0) {
-    return;
-  }
-
+void G1CollectedHeap::request_heap_shrink() {
   // Capture GC count before scheduling to detect if a GC occurs in the interim.
   uint gc_count_before = total_collections();
 
-  // Always schedule a VM operation for proper synchronization with GC.
-  // The VM operation will re-evaluate which regions to uncommit at the time of execution.
-  VM_G1ShrinkHeap op(this, gc_count_before, shrink_bytes);
+  // Schedule VM operation. It evaluates candidates in doit_prologue() under
+  // Heap_lock and performs the actual shrink at the safepoint in doit().
+  VM_G1ShrinkHeap op(this, gc_count_before);
   VMThread::execute(&op);
 }
 

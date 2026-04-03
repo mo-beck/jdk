@@ -113,17 +113,18 @@ public:
 class VM_G1ShrinkHeap : public VM_GC_Operation {
  private:
   G1CollectedHeap* _g1h;
-  size_t _bytes;  // Maximum bytes to shrink (used as hint for re-evaluation).
+  size_t _shrink_bytes;  // Computed in doit_prologue() under Heap_lock.
 
  protected:
   bool skip_operation() const override;
 
  public:
-  VM_G1ShrinkHeap(G1CollectedHeap* g1h, uint gc_count_before, size_t bytes)
+  VM_G1ShrinkHeap(G1CollectedHeap* g1h, uint gc_count_before)
     : VM_GC_Operation(gc_count_before, GCCause::_g1_periodic_collection, 0, false),
-      _g1h(g1h), _bytes(bytes) {}
+      _g1h(g1h), _shrink_bytes(0) {}
   VMOp_Type type() const override { return VMOp_G1ShrinkHeap; }
-  void doit() override;  // Re-evaluates regions at safepoint.
+  bool doit_prologue() override;  // Evaluates candidates under Heap_lock.
+  void doit() override;
 };
 
 #endif // SHARE_GC_G1_G1VMOPERATIONS_HPP

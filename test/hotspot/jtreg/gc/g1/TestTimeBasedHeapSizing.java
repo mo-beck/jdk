@@ -71,7 +71,7 @@ public class TestTimeBasedHeapSizing {
 
         output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
         output.shouldContain("Starting uncommit evaluation");
-        output.shouldContain("Full region scan:");
+        output.shouldContain("Uncommit evaluation: found");
 
         output.shouldHaveExitValue(0);
     }
@@ -100,8 +100,9 @@ public class TestTimeBasedHeapSizing {
 
             System.out.println("BasicFunctionalityTest: Completed idle period");
 
-            // Final cleanup
-            clearMemory();
+            // Do not trigger System.gc() here - it resets the GC timestamp
+            // baseline and would prevent time-based uncommit from finding
+            // eligible regions.
             Thread.sleep(500);
 
             System.out.println("BasicFunctionalityTest: Test completed");
@@ -151,6 +152,7 @@ public class TestTimeBasedHeapSizing {
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xms64m", "-Xmx256m",
             "-XX:G1HeapRegionSize=1M",
+            "-XX:G1TimeBasedEvaluationIntervalMillis=5000",
             "-XX:G1UncommitDelayMillis=5000",
             "-XX:G1MinRegionsToUncommit=1",
             "-Xlog:gc*,gc+sizing*=debug",
@@ -182,10 +184,12 @@ public class TestTimeBasedHeapSizing {
             // Keep them alive for a while
             Thread.sleep(3000);
 
-            // Clear and test uncommit behavior
+            // Clear and test uncommit behavior.
             humongousObjects.clear();
             System.gc();
-            Thread.sleep(12000); // Wait for uncommit delay
+            // Wait long enough for evaluation interval (5s) + uncommit delay (10s)
+            // plus margin for scheduling jitter on slow CI machines.
+            Thread.sleep(18000);
 
             System.out.println("HumongousObjectTest: Test completed");
             Runtime.getRuntime().halt(0);
@@ -218,8 +222,9 @@ public class TestTimeBasedHeapSizing {
                 }
             }
 
-            // Final wait for time-based evaluation
-            Thread.sleep(12000);
+            // Final wait for time-based evaluation. Need eval interval (5s) +
+            // uncommit delay (10s) + margin for CI scheduling jitter.
+            Thread.sleep(18000);
 
             System.out.println("RapidCycleTest: Test completed");
             Runtime.getRuntime().halt(0);
@@ -245,10 +250,11 @@ public class TestTimeBasedHeapSizing {
             humongousObjects.remove(0);
             System.gc();
 
-            // Wait for time-based evaluation with humongous regions present
-            Thread.sleep(8000);
+            // Wait for time-based evaluation with humongous regions present.
+            // Need eval interval (5s) + uncommit delay (5s) + margin.
+            Thread.sleep(14000);
 
-            // Clean up
+            // Clean up.
             humongousObjects.clear();
             System.gc();
 

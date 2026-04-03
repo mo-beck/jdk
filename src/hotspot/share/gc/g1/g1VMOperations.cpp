@@ -188,40 +188,31 @@ bool VM_G1ShrinkHeap::skip_operation() const {
   return VM_GC_Operation::skip_operation();
 }
 
+bool VM_G1ShrinkHeap::doit_prologue() {
+  // VM_GC_Operation::doit_prologue() acquires Heap_lock and checks
+  // skip_operation() / shutdown. If it returns false the operation is aborted.
+  if (!VM_GC_Operation::doit_prologue()) {
+    return false;
+  }
+
+  // Heap_lock is now held. Evaluate which regions should be uncommitted.
+  _shrink_bytes = _g1h->heap_sizing_policy()->evaluate_heap_resize_for_uncommit();
+
+  if (_shrink_bytes == 0) {
+    // Nothing to do - release Heap_lock and abort.
+    Heap_lock->unlock();
+    _prologue_succeeded = false;
+    return false;
+  }
+
+  log_debug(gc, sizing)("VM_G1ShrinkHeap: shrinking heap by %zuMB (%zuB) using time-based selection.",
+                       _shrink_bytes / M, _shrink_bytes);
+  return true;
+}
+
 void VM_G1ShrinkHeap::doit() {
-  // Re-evaluate candidates at safepoint since heap state may have changed.
-  log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: re-evaluating heap state at safepoint");
-
-  // Max regions based on original request
-  uint max_regions_to_shrink = (uint)(_bytes / G1HeapRegion::GrainBytes);
-
-  GrowableArray<G1HeapRegion*> candidates(max_regions_to_shrink);
-  _g1h->heap_sizing_policy()->find_uncommit_candidates_by_time(&candidates);
-
-  if (candidates.length() == 0) {
-    log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: no valid candidates at safepoint, skipping shrink");
-    return;
-  }
-
-  // Validate candidates are still free at safepoint
-  uint valid_count = 0;
-  for (int i = 0; i < candidates.length(); i++) {
-    G1HeapRegion* hr = candidates.at(i);
-    if (hr->is_free()) {
-      valid_count++;
-    } else {
-      log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: skipping region %u - no longer free", hr->hrm_index());
-    }
-  }
-
-  if (valid_count == 0) {
-    log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: no regions still valid at safepoint");
-    return;
-  }
-
-  size_t shrink_bytes = (size_t)valid_count * G1HeapRegion::GrainBytes;
-  log_info(gc, ergo, heap)("VM_G1ShrinkHeap: executing shrink with %u regions (%zuMB) after re-evaluation",
-                           valid_count, shrink_bytes / M);
-
-  _g1h->shrink_with_time_based_selection(shrink_bytes);
+  // shrink_with_time_based_selection() performs its own time-based region
+  // selection (scan, sort by age, decommit oldest) so no additional
+  // candidate evaluation is needed here.
+  _g1h->shrink_with_time_based_selection(_shrink_bytes);
 }

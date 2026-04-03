@@ -37,30 +37,32 @@
 G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy) :
   G1ServiceTask("G1 Heap Evaluation Task"),
   _g1h(g1h),
-  _heap_sizing_policy(heap_sizing_policy) {
+  _heap_sizing_policy(heap_sizing_policy),
+  _evaluation_count(0) {
 }
 
 void G1HeapEvaluationTask::execute() {
   log_debug(gc, sizing)("Starting uncommit evaluation.");
 
-  size_t resize_amount;
+  bool should_attempt;
 
-  // Join suspendible thread set for proper GC synchronization
+  // Join the suspendible thread set for proper GC synchronization while
+  // performing the lightweight pre-check. Do NOT acquire Heap_lock here:
+  // holding STS while blocking on Heap_lock deadlocks because a safepoint
+  // calls STS::synchronize() which waits for this thread to leave STS.
   {
     SuspendibleThreadSetJoiner sts;
-    resize_amount = _heap_sizing_policy->evaluate_heap_resize_for_uncommit();
+    should_attempt = _heap_sizing_policy->should_attempt_uncommit();
   }
 
-  static int evaluation_count = 0;
-
-  if (resize_amount > 0) {
-    log_info(gc, sizing)("Uncommit evaluation: shrinking heap by %zuMB (%zuB) using time-based selection.",
-                         resize_amount / M, resize_amount);
-    // Request VM operation outside of suspendible thread set.
-    _g1h->request_heap_shrink(resize_amount);
+  if (should_attempt) {
+    // Request VM operation outside of suspendible thread set. The VM
+    // operation acquires Heap_lock in doit_prologue() and re-evaluates
+    // candidates there.
+    _g1h->request_heap_shrink();
   } else {
-    if (++evaluation_count % 10 == 0) { // Log every 10th evaluation when no action taken.
-      log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (evaluation #%d)", evaluation_count);
+    if (++_evaluation_count % 10 == 0) { // Log every 10th evaluation when no action taken.
+      log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (evaluation #%d)", _evaluation_count);
     }
   }
 

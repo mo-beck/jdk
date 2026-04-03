@@ -292,8 +292,11 @@ public:
   // actual number uncommitted.
   uint uncommit_inactive_regions(uint limit);
 
-  // Record baseline timestamp for time-based heap sizing (O(1))
+  // Record baseline timestamp for time-based heap sizing (O(1)).
   void reset_free_region_timestamps();
+
+  // Return the baseline timestamp for time-based heap sizing.
+  Ticks last_gc_timestamp() const { return _last_gc_timestamp; }
 
   void verify();
 

@@ -618,9 +618,9 @@ public:
   bool expand(size_t expand_bytes, WorkerThreads* pretouch_workers);
   bool expand_single_region(uint node_index);
 
-  // Request an immediate heap contraction of (at most) the given number of bytes.
-  // Uses time-based region selection to shrink oldest eligible regions.
-  void request_heap_shrink(size_t shrink_bytes);
+  // Request a time-based heap shrink via VM operation. The operation evaluates
+  // candidates under Heap_lock in doit_prologue() and shrinks at safepoint.
+  void request_heap_shrink();
 
   // Returns the PLAB statistics for a given destination.
   inline G1EvacStats* alloc_buffer_stats(G1HeapRegionAttr dest);
@@ -954,6 +954,7 @@ public:
   G1Policy* policy() const { return _policy; }
   G1HeapSizingPolicy* heap_sizing_policy() const { return _heap_sizing_policy; }
   G1HeapRegionManager& heap_region_manager() { return _hrm; }
+  const G1HeapRegionManager& heap_region_manager() const { return _hrm; }
   // The remembered set.
   G1RemSet* rem_set() const { return _rem_set; }
 
