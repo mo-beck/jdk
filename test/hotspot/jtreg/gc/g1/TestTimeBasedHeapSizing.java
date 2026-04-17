@@ -40,20 +40,12 @@ package gc.g1;
  *     gc.g1.TestTimeBasedHeapSizing
  */
 
+import java.lang.management.ManagementFactory;
 import java.util.*;
 import jdk.test.lib.process.OutputAnalyzer;
 import jdk.test.lib.process.ProcessTools;
 
 public class TestTimeBasedHeapSizing {
-
-    private static final String TEST_VM_OPTS = "-XX:+UseG1GC " +
-        "-XX:+UnlockDiagnosticVMOptions " +
-        "-XX:G1TimeBasedEvaluationIntervalMillis=5000 " +
-        "-XX:G1UncommitDelayMillis=10000 " +
-        "-XX:G1MinRegionsToUncommit=2 " +
-        "-XX:G1HeapRegionSize=1M " +
-        "-Xmx128m -Xms32m " +
-        "-Xlog:gc*,gc+sizing*=debug";
 
     public static void main(String[] args) throws Exception {
         testBasicFunctionality();
@@ -62,16 +54,49 @@ public class TestTimeBasedHeapSizing {
         testLargeHumongousObjects();
     }
 
+    static ProcessBuilder createSubprocess(String testClass, String... extraArgs) {
+        List<String> args = new ArrayList<>();
+        args.addAll(List.of(
+            "-XX:+UseG1GC",
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:G1TimeBasedEvaluationIntervalMillis=5000",
+            "-XX:G1UncommitDelayMillis=10000",
+            "-XX:G1MinRegionsToUncommit=2",
+            "-XX:G1HeapRegionSize=1M",
+            "-Xmx128m", "-Xms32m",
+            "-Xlog:gc*,gc+sizing*=debug"
+        ));
+        args.addAll(List.of(extraArgs));
+        args.add(testClass);
+        return ProcessTools.createTestJavaProcessBuilder(args.toArray(new String[0]));
+    }
+
+    static long extractValue(String stdout, String prefix) {
+        for (String line : stdout.split("\n")) {
+            if (line.contains(prefix)) {
+                return Long.parseLong(line.substring(line.indexOf(prefix) + prefix.length()).trim());
+            }
+        }
+        throw new RuntimeException("Could not find '" + prefix + "' in subprocess output");
+    }
+
     static void testBasicFunctionality() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$BasicFunctionalityTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        ProcessBuilder pb = createSubprocess("gc.g1.TestTimeBasedHeapSizing$BasicFunctionalityTest");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
         output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
         output.shouldContain("Starting uncommit evaluation");
         output.shouldContain("Uncommit evaluation: found");
+
+        // Verify committed memory actually decreased, not just that logs appeared.
+        long before = extractValue(output.getStdout(), "HEAP_COMMITTED_BEFORE=");
+        long after = extractValue(output.getStdout(), "HEAP_COMMITTED_AFTER=");
+        if (after >= before) {
+            throw new RuntimeException(
+                "Expected committed heap to decrease after idle period, but before=" +
+                before + " after=" + after);
+        }
+        System.out.println("Committed heap decreased from " + before + " to " + after);
 
         output.shouldHaveExitValue(0);
     }
@@ -81,31 +106,26 @@ public class TestTimeBasedHeapSizing {
         private static ArrayList<byte[]> arrays = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("BasicFunctionalityTest: Starting heap activity");
-
-            // Create significant heap activity
             for (int cycle = 0; cycle < 3; cycle++) {
-                System.out.println("Allocation cycle " + cycle);
-                allocateMemory(25);  // 25MB per cycle
-                Thread.sleep(200);   // Brief pause
-                clearMemory();
+                allocateMemory(25);
+                Thread.sleep(200);
+                arrays.clear();
                 System.gc();
                 Thread.sleep(200);
             }
 
-            System.out.println("BasicFunctionalityTest: Starting idle period");
+            long before = ManagementFactory.getMemoryMXBean()
+                .getHeapMemoryUsage().getCommitted();
+            System.out.println("HEAP_COMMITTED_BEFORE=" + before);
 
-            // Sleep to allow time-based evaluation
-            Thread.sleep(18000);  // 18 seconds
+            // Wait for evaluation interval (5s) + uncommit delay (10s) + margin.
+            // Do not call System.gc() - it resets the GC timestamp baseline.
+            Thread.sleep(18000);
 
-            System.out.println("BasicFunctionalityTest: Completed idle period");
+            long after = ManagementFactory.getMemoryMXBean()
+                .getHeapMemoryUsage().getCommitted();
+            System.out.println("HEAP_COMMITTED_AFTER=" + after);
 
-            // Do not trigger System.gc() here - it resets the GC timestamp
-            // baseline and would prevent time-based uncommit from finding
-            // eligible regions.
-            Thread.sleep(500);
-
-            System.out.println("BasicFunctionalityTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
 
@@ -115,18 +135,11 @@ public class TestTimeBasedHeapSizing {
                 if (i % 4 == 0) Thread.sleep(10);
             }
         }
-
-        static void clearMemory() {
-            arrays.clear();
-            System.gc();
-        }
     }
 
     static void testHumongousObjectHandling() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$HumongousObjectTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedHeapSizing$HumongousObjectTest");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
         output.shouldContain("Starting uncommit evaluation");
@@ -134,10 +147,8 @@ public class TestTimeBasedHeapSizing {
     }
 
     static void testRapidAllocationCycles() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedHeapSizing$RapidCycleTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedHeapSizing$RapidCycleTest");
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
         output.shouldContain("Starting uncommit evaluation");
@@ -145,53 +156,35 @@ public class TestTimeBasedHeapSizing {
     }
 
     static void testLargeHumongousObjects() throws Exception {
-        System.out.println("Testing large humongous object activity tracking...");
-
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(
-            "-XX:+UseG1GC",
-            "-XX:+UnlockDiagnosticVMOptions",
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedHeapSizing$LargeHumongousTest",
             "-Xms64m", "-Xmx256m",
-            "-XX:G1HeapRegionSize=1M",
-            "-XX:G1TimeBasedEvaluationIntervalMillis=5000",
             "-XX:G1UncommitDelayMillis=5000",
-            "-XX:G1MinRegionsToUncommit=1",
-            "-Xlog:gc*,gc+sizing*=debug",
-            "gc.g1.TestTimeBasedHeapSizing$LargeHumongousTest"
+            "-XX:G1MinRegionsToUncommit=1"
         );
-
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
-        // Large humongous objects should not affect uncommit safety
         output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
         output.shouldHaveExitValue(0);
-        System.out.println("Large humongous object test passed!");
     }
 
     public static class HumongousObjectTest {
-        private static final int MB = 1024 * 1024;
         private static ArrayList<byte[]> humongousObjects = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("HumongousObjectTest: Starting");
-
-            // Allocate humongous objects (> 512KB for 1MB regions)
+            // Allocate humongous objects (> 512KB for 1MB regions).
             for (int i = 0; i < 8; i++) {
-                humongousObjects.add(new byte[800 * 1024]); // 800KB humongous
-                System.out.println("Allocated humongous object " + (i + 1));
+                humongousObjects.add(new byte[800 * 1024]);
                 Thread.sleep(200);
             }
 
-            // Keep them alive for a while
             Thread.sleep(3000);
 
-            // Clear and test uncommit behavior.
             humongousObjects.clear();
             System.gc();
-            // Wait long enough for evaluation interval (5s) + uncommit delay (10s)
-            // plus margin for scheduling jitter on slow CI machines.
+            // Wait for evaluation interval (5s) + uncommit delay (10s) + margin.
             Thread.sleep(18000);
 
-            System.out.println("HumongousObjectTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }
@@ -201,64 +194,44 @@ public class TestTimeBasedHeapSizing {
         private static ArrayList<byte[]> memory = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("RapidCycleTest: Starting");
-
-            // Rapid allocation/deallocation cycles
             for (int cycle = 0; cycle < 15; cycle++) {
-                // Quick allocation
                 for (int i = 0; i < 8; i++) {
-                    memory.add(new byte[MB]); // 1MB
+                    memory.add(new byte[MB]);
                 }
-
-                // Quick deallocation
                 memory.clear();
                 System.gc();
-
-                // Brief pause
                 Thread.sleep(100);
-
-                if (cycle % 5 == 0) {
-                    System.out.println("Completed cycle " + cycle);
-                }
             }
 
-            // Final wait for time-based evaluation. Need eval interval (5s) +
-            // uncommit delay (10s) + margin for CI scheduling jitter.
+            // Wait for evaluation interval (5s) + uncommit delay (10s) + margin.
             Thread.sleep(18000);
 
-            System.out.println("RapidCycleTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }
 
     public static class LargeHumongousTest {
         public static void main(String[] args) throws Exception {
-            System.out.println("=== Large Humongous Object Test ===");
-
-            // Allocate several large humongous objects (multiple regions each)
             List<byte[]> humongousObjects = new ArrayList<>();
 
-            // Each region is 1MB, so allocate 2MB objects (humongous spanning multiple regions)
+            // 2MB objects span multiple 1MB regions.
             for (int i = 0; i < 5; i++) {
                 humongousObjects.add(new byte[2 * 1024 * 1024]);
-                System.gc(); // Force potential region transitions
+                System.gc();
                 Thread.sleep(100);
             }
 
-            // Hold some, release others to create mixed region states
+            // Release some to create mixed region states.
             humongousObjects.remove(0);
             humongousObjects.remove(0);
             System.gc();
 
-            // Wait for time-based evaluation with humongous regions present.
-            // Need eval interval (5s) + uncommit delay (5s) + margin.
+            // Wait for evaluation interval (5s) + uncommit delay (5s) + margin.
             Thread.sleep(14000);
 
-            // Clean up.
             humongousObjects.clear();
             System.gc();
 
-            System.out.println("LargeHumongousTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }

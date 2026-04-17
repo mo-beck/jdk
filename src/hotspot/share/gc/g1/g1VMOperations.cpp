@@ -205,14 +205,11 @@ bool VM_G1ShrinkHeap::doit_prologue() {
     return false;
   }
 
-  log_debug(gc, sizing)("VM_G1ShrinkHeap: shrinking heap by %zuMB (%zuB) using time-based selection.",
-                       _shrink_bytes / M, _shrink_bytes);
+  log_debug(gc, ergo, heap)("VM_G1ShrinkHeap: shrinking heap by %zuMB (%zuB)",
+                            _shrink_bytes / M, _shrink_bytes);
   return true;
 }
 
 void VM_G1ShrinkHeap::doit() {
-  // shrink_with_time_based_selection() performs its own time-based region
-  // selection (scan, sort by age, decommit oldest) so no additional
-  // candidate evaluation is needed here.
   _g1h->shrink_with_time_based_selection(_shrink_bytes);
 }

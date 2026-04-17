@@ -46,14 +46,19 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class TestTimeBasedRegionTracking {
 
-    private static final String TEST_VM_OPTS = "-XX:+UseG1GC " +
-        "-XX:+UnlockDiagnosticVMOptions " +
-        "-XX:G1TimeBasedEvaluationIntervalMillis=5000 " +
-        "-XX:G1UncommitDelayMillis=10000 " +
-        "-XX:G1MinRegionsToUncommit=2 " +
-        "-XX:G1HeapRegionSize=1M " +
-        "-Xmx128m -Xms32m " +
-        "-Xlog:gc*,gc+sizing*=debug";
+    static ProcessBuilder createSubprocess(String testClass) {
+        return ProcessTools.createTestJavaProcessBuilder(
+            "-XX:+UseG1GC",
+            "-XX:+UnlockDiagnosticVMOptions",
+            "-XX:G1TimeBasedEvaluationIntervalMillis=5000",
+            "-XX:G1UncommitDelayMillis=10000",
+            "-XX:G1MinRegionsToUncommit=2",
+            "-XX:G1HeapRegionSize=1M",
+            "-Xmx128m", "-Xms32m",
+            "-Xlog:gc*,gc+sizing*=debug",
+            testClass
+        );
+    }
 
     public static void main(String[] args) throws Exception {
         testRegionStateTransitions();
@@ -63,25 +68,11 @@ public class TestTimeBasedRegionTracking {
     }
 
     static void testRegionStateTransitions() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$RegionTransitionTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedRegionTracking$RegionTransitionTest");
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
-        Process process = pb.start();
-        OutputAnalyzer output = new OutputAnalyzer(process);
-
-        // Verify region state changes and basic functionality
-        // Check for key log messages that indicate the feature is working
-        if (output.getStdout().contains("Region state transition:") ||
-            output.getStdout().contains("Uncommit candidates found:") ||
-            output.getStdout().contains("Starting uncommit evaluation")) {
-            System.out.println("Time-based evaluation system is working");
-        } else {
-            // If none of the expected messages appear, that's a failure
-            output.shouldContain("Starting uncommit evaluation");
-        }
-
+        output.shouldContain("Starting uncommit evaluation");
         output.shouldHaveExitValue(0);
     }
 
@@ -90,27 +81,22 @@ public class TestTimeBasedRegionTracking {
         private static ArrayList<byte[]> arrays = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("RegionTransitionTest: Starting");
-
-            // Phase 1: Active allocation
-            allocateMemory(20); // Reduced from 32MB for faster execution
+            allocateMemory(20);
             System.gc();
 
-            // Phase 2: Idle period
+            // Idle period - wait for evaluation + uncommit delay.
             arrays.clear();
             System.gc();
-            Thread.sleep(12000); // Reduced wait time - should still trigger uncommit
+            Thread.sleep(12000);
 
-            // Phase 3: Reallocation
-            allocateMemory(10); // Smaller reallocation
+            // Reallocate to exercise region reuse.
+            allocateMemory(10);
             System.gc();
 
-            // Clean up and wait for final uncommit evaluation
             arrays = null;
             System.gc();
-            Thread.sleep(1000); // Shorter final wait
+            Thread.sleep(1000);
 
-            System.out.println("RegionTransitionTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
 
@@ -123,41 +109,27 @@ public class TestTimeBasedRegionTracking {
     }
 
     static void testConcurrentRegionAccess() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$ConcurrentAccessTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-
-        Process process = pb.start();
-        OutputAnalyzer output = new OutputAnalyzer(process);
-
-        // Verify concurrent access is handled safely
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedRegionTracking$ConcurrentAccessTest");
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldHaveExitValue(0);
     }
 
     static void testRegionLifecycleEdgeCases() throws Exception {
-        String[] command = new String[TEST_VM_OPTS.split(" ").length + 1];
-        System.arraycopy(TEST_VM_OPTS.split(" "), 0, command, 0, TEST_VM_OPTS.split(" ").length);
-        command[command.length - 1] = "gc.g1.TestTimeBasedRegionTracking$RegionLifecycleEdgeCaseTest";
-        ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(command);
-
-        Process process = pb.start();
-        OutputAnalyzer output = new OutputAnalyzer(process);
-
-        // Verify region lifecycle edge cases are handled
+        ProcessBuilder pb = createSubprocess(
+            "gc.g1.TestTimeBasedRegionTracking$RegionLifecycleEdgeCaseTest");
+        OutputAnalyzer output = new OutputAnalyzer(pb.start());
         output.shouldHaveExitValue(0);
     }
 
     static void testSafepointRaceConditions() throws Exception {
-        System.out.println("Testing safepoint and allocation race conditions...");
-
         ProcessBuilder pb = ProcessTools.createTestJavaProcessBuilder(
             "-XX:+UseG1GC",
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xms64m", "-Xmx256m",
             "-XX:G1HeapRegionSize=1M",
-            "-XX:G1TimeBasedEvaluationIntervalMillis=5000", // More reasonable interval
-            "-XX:G1UncommitDelayMillis=3000", // Shorter delay for faster test
+            "-XX:G1TimeBasedEvaluationIntervalMillis=5000",
+            "-XX:G1UncommitDelayMillis=3000",
             "-XX:G1MinRegionsToUncommit=1",
             "-Xlog:gc*,gc+sizing*=debug",
             "gc.g1.TestTimeBasedRegionTracking$SafepointRaceTest"
@@ -165,10 +137,8 @@ public class TestTimeBasedRegionTracking {
 
         OutputAnalyzer output = new OutputAnalyzer(pb.start());
 
-        // Should handle safepoint races without errors
         output.shouldContain("G1 Time-Based Heap Sizing enabled (uncommit-only)");
         output.shouldHaveExitValue(0);
-        System.out.println("Safepoint race conditions test passed!");
     }
 
     public static class ConcurrentAccessTest {
@@ -177,9 +147,6 @@ public class TestTimeBasedRegionTracking {
         private static volatile boolean stopThreads = false;
 
         public static void main(String[] args) throws Exception {
-            System.out.println("ConcurrentAccessTest: Starting");
-
-            // Start multiple allocation threads
             Thread[] threads = new Thread[3];
             for (int t = 0; t < threads.length; t++) {
                 final int threadId = t;
@@ -221,21 +188,19 @@ public class TestTimeBasedRegionTracking {
                 threads[t].start();
             }
 
-            // Let threads run for a shorter time
-            Thread.sleep(5000); // Reduced from 8000ms
+            Thread.sleep(5000);
 
             stopThreads = true;
             for (Thread t : threads) {
-                t.join(1000); // Reduced join timeout
+                t.join(1000);
             }
 
             synchronized (sharedMemory) {
                 sharedMemory.clear();
             }
             System.gc();
-            Thread.sleep(1000); // Reduced from 3000ms
+            Thread.sleep(1000);
 
-            System.out.println("ConcurrentAccessTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }
@@ -245,27 +210,20 @@ public class TestTimeBasedRegionTracking {
         private static List<Object> memory = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("RegionLifecycleEdgeCaseTest: Starting");
-
-            // Phase 1: Mixed allocation patterns
-            // Small objects
+            // Mixed allocation patterns: small, medium, large (not humongous).
             for (int i = 0; i < 100; i++) {
-                memory.add(new byte[8 * 1024]); // 8KB objects
+                memory.add(new byte[8 * 1024]);
             }
-
-            // Medium objects
             for (int i = 0; i < 20; i++) {
-                memory.add(new byte[40 * 1024]); // 40KB objects
+                memory.add(new byte[40 * 1024]);
             }
-
-            // Large objects (but not humongous)
             for (int i = 0; i < 5; i++) {
-                memory.add(new byte[300 * 1024]); // 300KB objects
+                memory.add(new byte[300 * 1024]);
             }
 
             Thread.sleep(2000);
 
-            // Phase 2: Create fragmentation by selective deallocation
+            // Create fragmentation by selective deallocation.
             for (int i = memory.size() - 1; i >= 0; i -= 2) {
                 memory.remove(i);
             }
@@ -273,45 +231,38 @@ public class TestTimeBasedRegionTracking {
             System.gc();
             Thread.sleep(3000);
 
-            // Phase 3: Add humongous objects
+            // Add humongous objects (> 512KB for 1MB regions).
             for (int i = 0; i < 3; i++) {
-                memory.add(new byte[900 * 1024]); // 900KB humongous
+                memory.add(new byte[900 * 1024]);
                 Thread.sleep(500);
             }
 
             Thread.sleep(2000);
 
-            // Phase 4: Final cleanup
             memory.clear();
             System.gc();
-            Thread.sleep(6000); // Reduced wait time but still allow for evaluation
+            Thread.sleep(6000);
 
-            System.out.println("RegionLifecycleEdgeCaseTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }
 
     public static class SafepointRaceTest {
         public static void main(String[] args) throws Exception {
-            System.out.println("=== Safepoint Race Conditions Test ===");
-
             final AtomicBoolean stopFlag = new AtomicBoolean(false);
             final List<byte[]> sharedMemory = Collections.synchronizedList(new ArrayList<>());
 
-            // Start fewer threads with reduced iterations for faster completion
             Thread[] threads = new Thread[2];
             for (int i = 0; i < threads.length; i++) {
                 final int threadId = i;
                 threads[i] = new Thread(() -> {
                     int iteration = 0;
-                    while (!stopFlag.get() && iteration < 10) { // Reduced iterations
+                    while (!stopFlag.get() && iteration < 10) {
                         try {
-                            // Allocate and deallocate
-                            for (int j = 0; j < 3; j++) { // Fewer allocations per iteration
-                                sharedMemory.add(new byte[256 * 1024]); // Smaller allocations
+                            for (int j = 0; j < 3; j++) {
+                                sharedMemory.add(new byte[256 * 1024]);
                             }
 
-                            // Force GC less frequently
                             if (iteration % 5 == 0) {
                                 System.gc();
                             }
@@ -327,34 +278,27 @@ public class TestTimeBasedRegionTracking {
                                 }
                             }
 
-                            Thread.sleep(50); // Shorter pause
+                            Thread.sleep(50);
                             iteration++;
                         } catch (InterruptedException e) {
                             break;
                         }
                     }
-                    System.out.println("Thread " + threadId + " completed");
                 });
                 threads[i].start();
             }
 
-            // Much shorter run time - just enough for one evaluation cycle
             Thread.sleep(4000);
 
-            // Stop threads
             stopFlag.set(true);
             for (Thread thread : threads) {
                 thread.join(1000);
             }
 
-            // Clean up
             sharedMemory.clear();
             System.gc();
-
-            // Wait for one more evaluation cycle to see some activity
             Thread.sleep(2000);
 
-            System.out.println("SafepointRaceTest: Test completed");
             Runtime.getRuntime().halt(0);
         }
     }

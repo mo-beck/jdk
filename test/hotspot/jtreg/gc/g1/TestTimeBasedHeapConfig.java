@@ -53,7 +53,6 @@ public class TestTimeBasedHeapConfig {
     }
 
     static void testConfigurationParameters() throws Exception {
-        // Test default settings
         verifyVMConfig(new String[] {
             "-XX:+UseG1GC",
             "-XX:+UnlockDiagnosticVMOptions",
@@ -75,17 +74,14 @@ public class TestTimeBasedHeapConfig {
         private static ArrayList<byte[]> arrays = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            // Initial allocation
-            allocateMemory(8); // 8MB
+            allocateMemory(8);
             System.gc();
             Thread.sleep(1000);
 
-            // Clean up
             arrays.clear();
             System.gc();
             Thread.sleep(2000);
 
-            System.out.println("Basic configuration test completed successfully");
             Runtime.getRuntime().halt(0);
         }
 
@@ -98,39 +94,36 @@ public class TestTimeBasedHeapConfig {
     }
 
     static void testBoundaryValues() throws Exception {
-        // Test minimum values
         verifyVMConfig(new String[] {
             "-XX:+UseG1GC",
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xms8m", "-Xmx32m",
             "-XX:G1HeapRegionSize=1M",
-            "-XX:G1TimeBasedEvaluationIntervalMillis=1000", // 1 second minimum
-            "-XX:G1UncommitDelayMillis=1000", // 1 second minimum
-            "-XX:G1MinRegionsToUncommit=1", // 1 region minimum
+            "-XX:G1TimeBasedEvaluationIntervalMillis=1000",
+            "-XX:G1UncommitDelayMillis=1000",
+            "-XX:G1MinRegionsToUncommit=1",
             "-Xlog:gc*,gc+sizing*=debug",
             "gc.g1.TestTimeBasedHeapConfig$BoundaryTest"
         });
 
-        // Test maximum reasonable values
         verifyVMConfig(new String[] {
             "-XX:+UseG1GC",
             "-XX:+UnlockDiagnosticVMOptions",
             "-Xms32m", "-Xmx256m",
             "-XX:G1HeapRegionSize=1M",
-            "-XX:G1TimeBasedEvaluationIntervalMillis=300000", // 5 minutes
-            "-XX:G1UncommitDelayMillis=300000", // 5 minutes
-            "-XX:G1MinRegionsToUncommit=50", // 50 regions
+            "-XX:G1TimeBasedEvaluationIntervalMillis=300000",
+            "-XX:G1UncommitDelayMillis=300000",
+            "-XX:G1MinRegionsToUncommit=50",
             "-Xlog:gc*,gc+sizing*=debug",
             "gc.g1.TestTimeBasedHeapConfig$BoundaryTest"
         });
     }
 
     static void testEdgeCaseConfigurations() throws Exception {
-        // Test with very small heap (should still work)
         verifyVMConfig(new String[] {
             "-XX:+UseG1GC",
             "-XX:+UnlockDiagnosticVMOptions",
-            "-Xms4m", "-Xmx8m", // Very small heap
+            "-Xms4m", "-Xmx8m",
             "-XX:G1HeapRegionSize=1M",
             "-XX:G1TimeBasedEvaluationIntervalMillis=2000",
             "-XX:G1UncommitDelayMillis=3000",
@@ -145,17 +138,13 @@ public class TestTimeBasedHeapConfig {
         private static ArrayList<byte[]> arrays = new ArrayList<>();
 
         public static void main(String[] args) throws Exception {
-            System.out.println("BoundaryTest: Starting");
-
-            // Test with boundary conditions
-            allocateMemory(4); // 4MB
+            allocateMemory(4);
             Thread.sleep(2000);
 
             arrays.clear();
             System.gc();
-            Thread.sleep(5000); // Wait for evaluation
+            Thread.sleep(5000);
 
-            System.out.println("BoundaryTest: Completed");
             Runtime.getRuntime().halt(0);
         }
 
@@ -169,17 +158,13 @@ public class TestTimeBasedHeapConfig {
 
     public static class SmallHeapTest {
         public static void main(String[] args) throws Exception {
-            System.out.println("SmallHeapTest: Starting with very small heap");
-
-            // With 4-8MB heap, just allocate a small amount
-            byte[] smallAlloc = new byte[1024 * 1024]; // 1MB
+            byte[] smallAlloc = new byte[1024 * 1024];
             Thread.sleep(2000);
 
             smallAlloc = null;
             System.gc();
             Thread.sleep(5000);
 
-            System.out.println("SmallHeapTest: Completed");
             Runtime.getRuntime().halt(0);
         }
     }

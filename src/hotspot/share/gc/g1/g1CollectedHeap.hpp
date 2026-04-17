@@ -618,8 +618,7 @@ public:
   bool expand(size_t expand_bytes, WorkerThreads* pretouch_workers);
   bool expand_single_region(uint node_index);
 
-  // Request a time-based heap shrink via VM operation. The operation evaluates
-  // candidates under Heap_lock in doit_prologue() and shrinks at safepoint.
+  // Request a time-based heap shrink via VM_G1ShrinkHeap.
   void request_heap_shrink();
 
   // Returns the PLAB statistics for a given destination.
@@ -765,7 +764,7 @@ private:
   void shrink(size_t shrink_bytes);
   void shrink_helper(size_t expand_bytes);
 
-  // Time-based shrinking that selects oldest regions instead of from end
+  // Shrink by uncommitting the oldest idle regions.
   void shrink_with_time_based_selection(size_t shrink_bytes);
   void shrink_helper_with_time_based_selection(size_t shrink_bytes);
 

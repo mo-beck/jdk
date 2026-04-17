@@ -25,17 +25,12 @@
 #ifndef SHARE_GC_G1_G1HEAPSIZINGPOLICY_HPP
 #define SHARE_GC_G1_G1HEAPSIZINGPOLICY_HPP
 
-#include "gc/g1/g1_globals.hpp"
 #include "gc/g1/g1Analytics.hpp"
-#include "gc/g1/g1HeapRegion.hpp"
 #include "memory/allocation.hpp"
-#include "runtime/globals.hpp"
-#include "utilities/debug.hpp"
-#include "utilities/globalDefinitions.hpp"
 #include "utilities/numberSeq.hpp"
-#include "utilities/ticks.hpp"
 
 class G1CollectedHeap;
+class G1HeapRegion;
 
 //
 // Contains heuristics to resize the heap, i.e. expand or shrink, during operation.
@@ -100,9 +95,8 @@ class G1HeapSizingPolicy: public CHeapObj<mtGC> {
 
   G1HeapSizingPolicy(const G1CollectedHeap* g1h, const G1Analytics* analytics);
 
-  // Time-based sizing helpers.
+  // Count free regions eligible for time-based uncommit.
   uint count_uncommit_candidates();
-  bool should_uncommit_region(G1HeapRegion* hr) const;
 
 public:
   static constexpr uint long_term_count_limit() {
@@ -117,10 +111,10 @@ public:
   // should by expanded by that amount, shrunk otherwise.
   size_t full_collection_resize_amount(bool& expand, size_t allocation_word_size);
 
-  // Time-based sizing methods
+  // Returns true if the given free region has been idle long enough to uncommit.
+  bool should_uncommit_region(G1HeapRegion* hr) const;
 
-  // Lightweight pre-check (no locks). Returns true if a VM operation should be
-  // scheduled to attempt uncommit.
+  // Lightweight pre-check (no locks).
   bool should_attempt_uncommit() const;
 
   // Full evaluation under Heap_lock. Returns the number of bytes to shrink.

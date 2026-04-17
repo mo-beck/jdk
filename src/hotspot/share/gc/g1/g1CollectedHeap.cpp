@@ -1191,32 +1191,19 @@ bool G1CollectedHeap::expand_single_region(uint node_index) {
 }
 
 void G1CollectedHeap::shrink_with_time_based_selection(size_t shrink_bytes) {
-  if (capacity() == min_capacity()) {
-    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (heap already at minimum)");
-    return;
-  }
-
   size_t aligned_shrink_bytes = os::align_down_vm_page_size(shrink_bytes);
   aligned_shrink_bytes = align_down(aligned_shrink_bytes, G1HeapRegion::GrainBytes);
-
   aligned_shrink_bytes = capacity() - MAX2(capacity() - aligned_shrink_bytes, min_capacity());
-  assert(is_aligned(aligned_shrink_bytes, G1HeapRegion::GrainBytes), "Bytes to shrink %zuB not aligned", aligned_shrink_bytes);
-
-  log_debug(gc, ergo, heap)("Time-based shrink: Requested shrink amount: %zuB aligned shrink amount: %zuB",
-                            shrink_bytes, aligned_shrink_bytes);
+  assert(is_aligned(aligned_shrink_bytes, G1HeapRegion::GrainBytes),
+         "Bytes to shrink %zuB not aligned", aligned_shrink_bytes);
 
   if (aligned_shrink_bytes == 0) {
-    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (shrink request too small)");
     return;
   }
 
   _verifier->verify_region_sets_optional();
-
-  // Called from VMThread via VM_G1ShrinkHeap during time-based heap evaluation.
-  // This is not a GC - just uncommitting free regions at a safepoint.
   assert_at_safepoint_on_vm_thread();
 
-  // For time-based shrink, we use time-aware selection instead of removing from end.
   _hrm.remove_all_free_regions();
   shrink_helper_with_time_based_selection(aligned_shrink_bytes);
   rebuild_region_sets(true /* free_list_only */);
@@ -1232,26 +1219,13 @@ void G1CollectedHeap::shrink_helper_with_time_based_selection(size_t shrink_byte
          shrink_bytes, G1HeapRegion::GrainBytes);
 
   uint num_regions_to_remove = (uint)(shrink_bytes / G1HeapRegion::GrainBytes);
-  uint num_regions_removed = 0;
-
-  // Use time-based selection to shrink oldest eligible regions
-  log_debug(gc, ergo, heap)("Time-based shrink: removing %u oldest regions (%zuB)",
-                            num_regions_to_remove, shrink_bytes);
-  num_regions_removed = _hrm.shrink_by(num_regions_to_remove, true /* use_time_based_selection */);
-
-  size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
-  log_debug(gc, ergo, heap)("Time-based shrink: Requested shrinking amount: %zuB actual shrinking amount: %zuB (%u regions)",
-                            shrink_bytes, shrunk_bytes, num_regions_removed);
+  uint num_regions_removed = _hrm.shrink_by_time_based(num_regions_to_remove, _heap_sizing_policy);
 
   if (num_regions_removed > 0) {
-    log_info(gc, heap)("Time-based shrink: uncommitted %u oldest regions (%zuMB), heap size now %zuMB",
-                       num_regions_removed, shrunk_bytes / M, capacity() / M);
-    log_debug(gc, heap)("Time-based shrink details: requested=%zuB actual=%zuB "
-                        "regions_removed=%u heap_capacity=%zuB",
-                        shrink_bytes, shrunk_bytes, num_regions_removed, capacity());
+    size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
+    log_info(gc, ergo, heap)("Time-based shrink: deactivated %u regions (%zuMB), heap now %zuMB",
+                             num_regions_removed, shrunk_bytes / M, capacity() / M);
     policy()->record_new_heap_size(num_committed_regions());
-  } else {
-    log_debug(gc, ergo, heap)("Time-based shrink: Did not shrink the heap (no eligible regions found)");
   }
 }
 
@@ -1264,8 +1238,7 @@ void G1CollectedHeap::shrink_helper(size_t shrink_bytes) {
   uint num_regions_to_remove = (uint)(shrink_bytes / G1HeapRegion::GrainBytes);
   uint num_regions_removed = 0;
 
-  // Always perform normal heap shrinking when requested
-  // This preserves the original GC-triggered shrinking behavior
+  // Always perform normal heap shrinking when requested.
   num_regions_removed = _hrm.shrink_by(num_regions_to_remove);
 
   size_t shrunk_bytes = num_regions_removed * G1HeapRegion::GrainBytes;
@@ -2681,7 +2654,8 @@ void G1CollectedHeap::verify_region_attr_is_remset_tracked() {
       assert((r->rem_set()->is_tracked() == is_remset_tracked) ||
              (attr.is_new_survivor() && is_remset_tracked),
              "Region %u (%s) remset tracking status (%s) different to region attribute (%s)",
-             r->hrm_index(), r->get_type_str(), BOOL_TO_STR(r->rem_set()->is_tracked()), BOOL_TO_STR(is_remset_tracked));
+             r->hrm_index(), r->get_type_str(),
+             BOOL_TO_STR(r->rem_set()->is_tracked()), BOOL_TO_STR(is_remset_tracked));
       return false;
     }
   } cl;
@@ -2806,7 +2780,7 @@ void G1CollectedHeap::prepare_for_mutator_after_young_collection() {
   start_new_collection_set();
   _allocator->init_mutator_alloc_regions();
 
-  // Reset timestamps for time-based heap sizing
+  // Reset timestamps for time-based heap sizing.
   if (G1UseTimeBasedHeapSizing) {
     _hrm.reset_free_region_timestamps();
   }

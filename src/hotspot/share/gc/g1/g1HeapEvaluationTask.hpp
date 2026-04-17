@@ -31,12 +31,12 @@
 class G1CollectedHeap;
 class G1HeapSizingPolicy;
 
-// Time-based heap evaluation task that runs on the G1 service thread.
-// Uses G1ServiceTask for better integration with G1 lifecycle and scheduling.
+// Periodic task that evaluates whether idle heap regions should be uncommitted.
+// Runs on the G1 service thread at G1TimeBasedEvaluationIntervalMillis intervals.
 class G1HeapEvaluationTask : public G1ServiceTask {
   G1CollectedHeap* _g1h;
   G1HeapSizingPolicy* _heap_sizing_policy;
-  int _evaluation_count;  // Number of evaluations with no action taken.
+  int _idle_evaluation_count;  // Consecutive evaluations with no uncommit action.
 
 public:
   G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy);

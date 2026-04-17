@@ -23,49 +23,40 @@
  */
 
 #include "gc/g1/g1CollectedHeap.hpp"
-#include "gc/g1/g1CollectedHeap.inline.hpp"
 #include "gc/g1/g1HeapEvaluationTask.hpp"
 #include "gc/g1/g1HeapSizingPolicy.hpp"
 #include "gc/g1/g1ServiceThread.hpp"
 #include "gc/shared/suspendibleThreadSet.hpp"
 #include "logging/log.hpp"
-#include "memory/resourceArea.hpp"
-#include "runtime/globals.hpp"
-#include "utilities/debug.hpp"
-#include "utilities/globalDefinitions.hpp"
 
 G1HeapEvaluationTask::G1HeapEvaluationTask(G1CollectedHeap* g1h, G1HeapSizingPolicy* heap_sizing_policy) :
   G1ServiceTask("G1 Heap Evaluation Task"),
   _g1h(g1h),
   _heap_sizing_policy(heap_sizing_policy),
-  _evaluation_count(0) {
+  _idle_evaluation_count(0) {
 }
 
 void G1HeapEvaluationTask::execute() {
-  log_debug(gc, sizing)("Starting uncommit evaluation.");
-
   bool should_attempt;
 
-  // Join the suspendible thread set for proper GC synchronization while
-  // performing the lightweight pre-check. Do NOT acquire Heap_lock here:
-  // holding STS while blocking on Heap_lock deadlocks because a safepoint
-  // calls STS::synchronize() which waits for this thread to leave STS.
+  // Join STS for GC synchronization during the lightweight pre-check.
+  // Do NOT acquire Heap_lock here: holding STS while blocking on Heap_lock
+  // deadlocks because a safepoint calls STS::synchronize().
   {
     SuspendibleThreadSetJoiner sts;
     should_attempt = _heap_sizing_policy->should_attempt_uncommit();
   }
 
   if (should_attempt) {
-    // Request VM operation outside of suspendible thread set. The VM
-    // operation acquires Heap_lock in doit_prologue() and re-evaluates
-    // candidates there.
+    _idle_evaluation_count = 0;
     _g1h->request_heap_shrink();
   } else {
-    if (++_evaluation_count % 10 == 0) { // Log every 10th evaluation when no action taken.
-      log_info(gc, sizing)("Uncommit evaluation: no heap uncommit needed (evaluation #%d)", _evaluation_count);
+    _idle_evaluation_count++;
+    if (_idle_evaluation_count % 10 == 0) {
+      log_debug(gc, ergo, heap)("Uncommit evaluation: no action for %d consecutive checks",
+                                _idle_evaluation_count);
     }
   }
 
-  // Schedule the next evaluation.
   schedule(G1TimeBasedEvaluationIntervalMillis);
 }

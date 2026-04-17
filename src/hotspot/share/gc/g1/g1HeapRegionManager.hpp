@@ -37,6 +37,7 @@
 class G1HeapRegion;
 class G1HeapRegionClaimer;
 class G1HeapRegionClosure;
+class G1HeapSizingPolicy;
 class G1FreeRegionList;
 class WorkerThreads;
 
@@ -127,7 +128,7 @@ class G1HeapRegionManager: public CHeapObj<mtGC> {
   G1RegionToSpaceMapper* _bitmap_mapper;
   G1FreeRegionList _free_list;
 
-  // Baseline timestamp for time-based heap sizing (updated after each GC)
+  // Baseline timestamp for time-based heap sizing (updated after each GC).
   Ticks _last_gc_timestamp;
 
   void expand(uint index, uint num_regions, WorkerThreads* pretouch_workers = nullptr);
@@ -142,8 +143,9 @@ class G1HeapRegionManager: public CHeapObj<mtGC> {
   void reactivate_regions(uint start, uint num_regions);
   void uncommit_regions(uint start, uint num_regions);
 
-  // Time-based shrinking helper: find and shrink oldest empty regions
-  uint shrink_by_time_based_selection(uint num_regions_to_remove);
+  // Time-based shrinking: find and deactivate oldest idle regions.
+  uint shrink_by_time_based_selection(uint num_regions_to_remove,
+                                      const G1HeapSizingPolicy* policy);
 
   // Allocate a new G1HeapRegion for the given index.
   G1HeapRegion* new_heap_region(uint hrm_index);
@@ -279,7 +281,10 @@ public:
   // Uncommit up to num_regions_to_remove regions that are completely free.
   // Return the actual number of uncommitted regions.
   uint shrink_by(uint num_regions_to_remove);
-  uint shrink_by(uint num_regions_to_remove, bool use_time_based_selection);
+
+  // Time-based variant: deactivate the oldest idle free regions.
+  uint shrink_by_time_based(uint num_regions_to_remove,
+                            const G1HeapSizingPolicy* policy);
 
   // Remove a number of regions starting at the specified index, which must be available,
   // empty, and free. The regions are marked inactive and can later be uncommitted.
@@ -292,7 +297,7 @@ public:
   // actual number uncommitted.
   uint uncommit_inactive_regions(uint limit);
 
-  // Record baseline timestamp for time-based heap sizing (O(1)).
+  // Record baseline timestamp for time-based heap sizing.
   void reset_free_region_timestamps();
 
   // Return the baseline timestamp for time-based heap sizing.
